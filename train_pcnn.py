@@ -80,10 +80,13 @@ def parse_args():
                         help='whether perform adding meta loss')
     parser.add_argument('--phase', dest='phase',
                         help='the phase of training process',
-                        default=1, type=int) 
+                        default=1, type=int)
+    parser.add_argument('--dior_root', dest='dior_root',
+                        help='path to DIOR dataset root (contains ImageSets, JPEGImages, Annotations)',
+                        default=None, type=str)
     parser.add_argument('--shots', dest='shots',
                         help='the number meta input of PRN network',
-                        default=3, type=int) 
+                        default=3, type=int)
     parser.add_argument('--meta_type', dest='meta_type', default=1, type=int, 
                         help='choose which sets of metaclass')
     # config optimization
@@ -189,6 +192,14 @@ if __name__ == '__main__':
     if args.set_cfgs is not None:
         cfg_from_list(args.set_cfgs)
 
+    dior_root = args.dior_root
+    if dior_root is None:
+        dior_root = os.path.join(cfg.DATA_DIR, 'DIOR')
+    dior_root = os.path.abspath(dior_root)
+    cfg.DATA_DIR = os.path.abspath(os.path.join(dior_root, os.pardir))
+    if not os.path.exists(dior_root):
+        raise FileNotFoundError('DIOR dataset root not found: {}'.format(dior_root))
+
     print('Using config:')
     pprint.pprint(cfg)
     np.random.seed(cfg.RNG_SEED)
@@ -231,11 +242,11 @@ if __name__ == '__main__':
             img_set = "train"
 
         if cfg.mask_on:
-            metadataset = ImagePatchDiorMetaDataset("/home/hy/dataset/DIOR/",
+            metadataset = ImagePatchDiorMetaDataset(dior_root,
                                                     img_set, metaclass, img_size, shots=shots, shuffle=True,
                                                     phase=args.phase)
         else:
-            metadataset = DiorMetaDataset("/home/hy/dataset/DIOR/",
+            metadataset = DiorMetaDataset(dior_root,
                                           img_set, metaclass, img_size, shots=shots, shuffle=True, phase=args.phase)
 
         metaloader = torch.utils.data.DataLoader(metadataset, batch_size=1, shuffle=False, num_workers=0,
