@@ -195,10 +195,20 @@ if __name__ == '__main__':
     dior_root = args.dior_root
     if dior_root is None:
         dior_root = os.path.join(cfg.DATA_DIR, 'DIOR')
+
+    # Resolve and validate DIOR location. If a user accidentally omits the leading
+    # slash (e.g., "autodl-tmp/..." instead of "/autodl-tmp/..."), fall back to
+    # the absolute variant so training can proceed.
     dior_root = os.path.abspath(dior_root)
-    cfg.DATA_DIR = os.path.abspath(os.path.join(dior_root, os.pardir))
     if not os.path.exists(dior_root):
-        raise FileNotFoundError('DIOR dataset root not found: {}'.format(dior_root))
+        alt_dior_root = os.path.abspath('/' + dior_root.lstrip(os.sep))
+        if os.path.exists(alt_dior_root):
+            print('Resolved DIOR dataset root from {} to {}'.format(dior_root, alt_dior_root))
+            dior_root = alt_dior_root
+        else:
+            raise FileNotFoundError('DIOR dataset root not found: {}'.format(dior_root))
+
+    cfg.DATA_DIR = os.path.abspath(os.path.join(dior_root, os.pardir))
 
     print('Using config:')
     pprint.pprint(cfg)
