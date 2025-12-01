@@ -29,6 +29,14 @@ __C.TRAIN.META_TYPE = 1
 
 __C.mask_on = False
 
+# Prototype decoupling and angle-aware settings
+__C.PROTO = edict()
+__C.PROTO.DIM = 2048
+__C.PROTO.D_THETA = 6
+__C.PROTO.TOP_M = -1
+__C.PROTO.LAMBDA_DEC = 0.1
+__C.PROTO.LAMBDA_FG = 0.5
+
 __C.Test_Subdataset = False
 ##### set classes ###
 __C.TRAIN.ALLCLASSES_FIRST = [ 'airplane', 'airport', 'dam', 'Expressway-Service-area', 'Expressway-toll-station',

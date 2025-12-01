@@ -239,6 +239,10 @@ class resnet(_fasterRCNN):
     self.meta_train = meta_train
     self.meta_test = meta_test
     self.meta_loss = meta_loss
+    self.proto_dim = cfg.PROTO.DIM
+    self.ang_dim = cfg.PROTO.D_THETA
+    self.lambda_dec = cfg.PROTO.LAMBDA_DEC
+    self.lambda_fg = cfg.PROTO.LAMBDA_FG
 
     _fasterRCNN.__init__(self, classes, class_agnostic,meta_train,meta_test,meta_loss)
 
@@ -271,6 +275,13 @@ class resnet(_fasterRCNN):
       self.RCNN_bbox_pred = nn.Linear(2048, 4) # x,y,w,h
     else:
       self.RCNN_bbox_pred = nn.Linear(2048, 4 * self.n_classes)
+
+    # prototype learners
+    self.fc_proto = nn.Linear(2048, self.proto_dim)
+    self.conv_angle = nn.Conv2d(self.dout_base_model, self.ang_dim, kernel_size=3, stride=1, padding=1, bias=True)
+    self.fc_ang_proj = nn.Linear(self.ang_dim, self.proto_dim)
+    self.fc_att = nn.Linear(self.proto_dim, 2048)
+    self.proto_cls_score = nn.Linear(2048, 1)
 
 
     # Fix blocks
@@ -319,16 +330,76 @@ class resnet(_fasterRCNN):
     fc7 = self.RCNN_top(pool5).mean(3).mean(2)
     return fc7
 
-  def prn_network(self,im_data):
+  def apply_prototype_attention(self, pooled_feat, prototypes=None):
+    base_cls_score = self.RCNN_cls_score(pooled_feat)
+    bbox_pred = self.RCNN_bbox_pred(pooled_feat)
+    if prototypes is None or prototypes.get('P_pure') is None:
+      return base_cls_score, bbox_pred
+
+    P_pure = prototypes['P_pure']
+    class_ids = prototypes.get('class_ids', list(range(P_pure.size(0))))
+    alpha = torch.sigmoid(self.fc_att(P_pure))
+    alpha = alpha.unsqueeze(0)  # 1 x C x D
+    roi = pooled_feat.unsqueeze(1)  # N x 1 x D
+    weighted = roi * alpha  # N x C x D
+    logits = self.proto_cls_score(weighted).squeeze(-1)  # N x C
+
+    proto_scores = base_cls_score.clone()
+    for idx, cid in enumerate(class_ids):
+      if cid < proto_scores.size(1):
+        proto_scores[:, cid] += logits[:, idx]
+    return proto_scores, bbox_pred
+
+  def prn_network(self, im_data, prn_cls):
     '''
-    the Predictor-head Remodeling Network (PRN)
-    :param im_data:
-    :return attention vectors:
+    Dual-branch prototype learner producing class and angle prototypes.
     '''
     if cfg.mask_on:
       base_feat = self.RCNN_base(self.rcnn_conv1(im_data))
     else:
       base_feat = self.RCNN_base(self.meta_conv1(im_data))
-    feature = self._head_to_tail(self.max_pooled(base_feat)) # self.max_pooled(base_feat)->len(meta_classes) * 1024 * 7 * 7
-    attentions = self.sigmoid(feature)
-    return  attentions
+
+    pooled = self._head_to_tail(self.max_pooled(base_feat))
+    cls_embed = self.fc_proto(pooled)
+    angle_feat = self.conv_angle(base_feat)
+    angle_desc = angle_feat.view(angle_feat.size(0), angle_feat.size(1), -1).max(dim=2)[0]
+
+    cls_dict = {}
+    ang_dict = {}
+    class_ids = []
+    for idx in range(len(prn_cls)):
+      cls_id = int(prn_cls[idx].cpu().numpy()[0]) if isinstance(prn_cls[idx], torch.Tensor) else int(prn_cls[idx])
+      class_ids.append(cls_id)
+      cls_dict.setdefault(cls_id, []).append(cls_embed[idx])
+      ang_dict.setdefault(cls_id, []).append(angle_desc[idx])
+
+    proto_list = []
+    ang_list = []
+    order = []
+    for cid in sorted(set(class_ids)):
+      order.append(cid)
+      proto_list.append(torch.stack(cls_dict[cid], dim=0).mean(dim=0))
+      ang_list.append(torch.stack(ang_dict[cid], dim=0).mean(dim=0))
+
+    P_init = torch.stack(proto_list, dim=0)
+    P_ang = torch.stack(ang_list, dim=0)
+    if cfg.PROTO.TOP_M and cfg.PROTO.TOP_M > 0:
+      vals, idx = torch.topk(P_ang, cfg.PROTO.TOP_M, dim=1)
+      P_ang = vals
+
+    P_ang_tilde = self.fc_ang_proj(P_ang)
+    dot = (P_init * P_ang_tilde).sum(dim=1, keepdim=True)
+    denom = (P_ang_tilde.pow(2).sum(dim=1, keepdim=True) + 1e-6)
+    P_pure = P_init - dot / denom * P_ang_tilde
+    P_pure = P_pure / (P_pure.norm(dim=1, keepdim=True) + 1e-6)
+    L_dec = ((F.cosine_similarity(P_init, P_ang_tilde, dim=1)) ** 2).mean()
+
+    self.proto_outputs = {
+      'P_init': P_init,
+      'P_pure': P_pure,
+      'P_ang': P_ang,
+      'P_ang_tilde': P_ang_tilde,
+      'class_ids': order,
+      'L_dec': L_dec * self.lambda_dec
+    }
+    return self.proto_outputs
