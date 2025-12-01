@@ -33,18 +33,29 @@ class AttentionsMerge(nn.Module):
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, attentions):
-        
-        # merge_list = []
-        # for attention in attentions:
-        #     attention = attention.unsqueeze(dim=0)
-        #     merge_list.append(self.d_reduction(attention))
-        # merge_list = torch.cat(merge_list, dim=1) # 第二步
-        # mergedattention = self.merge(merge_list)
-        # mergedattention = self.sigmoid(mergedattention)
+        if isinstance(attentions, (Variable, torch.Tensor)):
+            if attentions.dim() == 1:
+                attentions = [attentions]
+            else:
+                attentions = list(torch.unbind(attentions, dim=0))
+        elif isinstance(attentions, (list, tuple)):
+            attentions = list(attentions)
+        else:
+            raise TypeError('Unsupported attentions type: {}'.format(type(attentions)))
 
-        attentionSum = 0
-        for i in range(1, len(attentions)):
+        if len(attentions) == 0:
+            raise ValueError('attentions should not be empty when provided')
+
+        start_idx = 1 if len(attentions) > 1 else 0
+        attentionSum = attentions[start_idx].clone()
+        for i in range(start_idx + 1, len(attentions)):
             attentionSum += attentions[i]
+
+        if attentionSum.dim() == 1:
+            attentionSum = attentionSum.unsqueeze(0)
+        elif attentionSum.dim() > 2:
+            attentionSum = attentionSum.view(-1, attentionSum.size(-1))
+
         mergedattention = self.merge(attentionSum)
         mergedattention = self.sigmoid(mergedattention)
 
@@ -76,13 +87,18 @@ class Attention2Weights(nn.Module):
 
 class _RPN(nn.Module):
     """ region proposal network """
-    def __init__(self, din, num_classes):
+    def __init__(self, din, num_classes, lambda_fg=1.0, lambda_bg=1.0, lambda_attn=1.0):
         super(_RPN, self).__init__()
-        
+
         self.din = din  # get depth of input feature map, e.g., 512
         self.anchor_scales = cfg.ANCHOR_SCALES
         self.anchor_ratios = cfg.ANCHOR_RATIOS
         self.feat_stride = cfg.FEAT_STRIDE[0]
+
+        # weights for combining prototype foreground/background maps when provided
+        self.lambda_fg = lambda_fg
+        self.lambda_bg = lambda_bg
+        self.lambda_attn = lambda_attn
 
         # define the convrelu layers processing input feature map
         self.RPN_Conv = nn.Conv2d(self.din, 512, 3, 1, 1, bias=True)
@@ -122,7 +138,7 @@ class _RPN(nn.Module):
         )
         return x
 
-    def forward(self, base_feat, im_info, gt_boxes, num_boxes, attentions=None):
+    def forward(self, base_feat, im_info, gt_boxes, num_boxes, attentions=None, prototypes=None):
 
         batch_size = base_feat.size(0)
 
@@ -134,10 +150,90 @@ class _RPN(nn.Module):
         # 原版metarcnn需要把下面注释掉，改进版需要解注释
         # 在这里加上残差模块
         if attentions is not None:
+            if isinstance(attentions, (Variable, torch.Tensor)):
+                attentions = list(torch.unbind(attentions, dim=0)) if attentions.dim() > 1 else [attentions]
             merged_attention = self.Merge_Attention(attentions)
             weights = self.Class_Attention_Conv(merged_attention).view(self.nc_score_out, 512, 1, 1)
             Atten_Score = nn.functional.conv2d(rpn_conv1, weights)
-            rpn_cls_score = rpn_cls_score * Atten_Score + rpn_cls_score
+            rpn_cls_score = rpn_cls_score * (self.lambda_attn * Atten_Score) + rpn_cls_score
+
+        # Optionally fuse prototype maps (foreground/background cues) if provided.
+        # The prototypes are expected to be spatial maps that can be broadcast or
+        # interpolated to match the RPN classification map's spatial size.
+        if prototypes is not None:
+            proto_fg = prototypes
+            proto_bg = None
+
+            # unpack prototype dicts that may provide explicit fg/bg maps
+            if isinstance(prototypes, dict):
+                proto_fg = prototypes.get('fg') or prototypes.get('proto_fg') or prototypes.get('foreground')
+                proto_bg = prototypes.get('bg') or prototypes.get('proto_bg') or prototypes.get('background')
+                # fall back to any single tensor value if no common key found
+                if proto_fg is None and proto_bg is None:
+                    for value in prototypes.values():
+                        if torch.is_tensor(value):
+                            proto_fg = value
+                            break
+
+            if proto_fg is None and proto_bg is None:
+                # nothing usable provided
+                proto_fg = None
+
+            def _ensure_4d(tensor):
+                if tensor.dim() == 3:
+                    tensor = tensor.unsqueeze(1)
+                if tensor.dim() != 4:
+                    raise ValueError('prototypes must be 3D or 4D tensor, got {} dims'.format(tensor.dim()))
+                return tensor
+
+            if proto_fg is not None:
+                proto_fg = _ensure_4d(proto_fg)
+            if proto_bg is not None:
+                proto_bg = _ensure_4d(proto_bg)
+
+            # map channel dimension to the expected foreground/background channel counts
+            target_fg_channels = self.nc_score_out // 2
+            target_bg_channels = target_fg_channels
+
+            if proto_fg is not None:
+                if proto_fg.size(1) == 1:
+                    proto_fg = proto_fg.expand(proto_fg.size(0), target_fg_channels, proto_fg.size(2), proto_fg.size(3))
+                elif proto_fg.size(1) != target_fg_channels:
+                    proto_fg = proto_fg[:, :target_fg_channels, :, :]
+                    if proto_fg.size(1) < target_fg_channels:
+                        repeat_count = target_fg_channels - proto_fg.size(1)
+                        pad = proto_fg[:, -1:, :, :].expand(proto_fg.size(0), repeat_count, proto_fg.size(2), proto_fg.size(3))
+                        proto_fg = torch.cat([proto_fg, pad], dim=1)
+
+            if proto_bg is not None:
+                if proto_bg.size(1) == 1:
+                    proto_bg = proto_bg.expand(proto_bg.size(0), target_bg_channels, proto_bg.size(2), proto_bg.size(3))
+                elif proto_bg.size(1) != target_bg_channels:
+                    proto_bg = proto_bg[:, :target_bg_channels, :, :]
+                    if proto_bg.size(1) < target_bg_channels:
+                        repeat_count = target_bg_channels - proto_bg.size(1)
+                        pad = proto_bg[:, -1:, :, :].expand(proto_bg.size(0), repeat_count, proto_bg.size(2), proto_bg.size(3))
+                        proto_bg = torch.cat([proto_bg, pad], dim=1)
+
+            # resize spatially if needed
+            if proto_fg is not None and proto_fg.shape[2:] != rpn_cls_score.shape[2:]:
+                proto_fg = F.interpolate(proto_fg, size=rpn_cls_score.shape[2:], mode='bilinear', align_corners=False)
+            if proto_bg is not None and proto_bg.shape[2:] != rpn_cls_score.shape[2:]:
+                proto_bg = F.interpolate(proto_bg, size=rpn_cls_score.shape[2:], mode='bilinear', align_corners=False)
+
+            fg_target = rpn_cls_score[:, 1::2, :, :]
+            bg_target = rpn_cls_score[:, 0::2, :, :]
+
+            if proto_fg is not None:
+                proto_fg = proto_fg.expand_as(fg_target)
+                rpn_cls_score[:, 1::2, :, :] = fg_target + self.lambda_fg * proto_fg
+            if proto_bg is not None:
+                proto_bg = proto_bg.expand_as(bg_target)
+                rpn_cls_score[:, 0::2, :, :] = bg_target + self.lambda_bg * proto_bg
+            elif proto_fg is not None:
+                # derive background cues from foreground if explicit bg map not provided
+                proto_bg = (1 - proto_fg).expand_as(bg_target)
+                rpn_cls_score[:, 0::2, :, :] = bg_target + self.lambda_bg * proto_bg
 
 
         rpn_cls_score_reshape = self.reshape(rpn_cls_score, 2)

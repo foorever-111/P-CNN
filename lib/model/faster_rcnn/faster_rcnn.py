@@ -37,8 +37,19 @@ class _fasterRCNN(nn.Module):
         self.RCNN_loss_cls = 0
         self.RCNN_loss_bbox = 0
 
+        # configurable fusion scales for attention/prototype branches
+        self.lambda_attn = getattr(self, 'lambda_attn', 1.0)
+        self.lambda_fg = getattr(self, 'lambda_fg', 1.0)
+        self.lambda_bg = getattr(self, 'lambda_bg', 1.0)
+
         # define rpn
-        self.RCNN_rpn = _RPN(self.dout_base_model, self.n_classes)
+        self.RCNN_rpn = _RPN(
+            self.dout_base_model,
+            self.n_classes,
+            lambda_fg=self.lambda_fg,
+            lambda_bg=self.lambda_bg,
+            lambda_attn=self.lambda_attn,
+        )
         self.RCNN_proposal_target = _ProposalTargetLayer(self.n_classes)
         self.RCNN_roi_pool = _RoIPooling(cfg.POOLING_SIZE, cfg.POOLING_SIZE, 1.0 / 16.0)
         self.RCNN_roi_align = RoIAlignAvg(cfg.POOLING_SIZE, cfg.POOLING_SIZE, 1.0 / 16.0)
