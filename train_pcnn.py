@@ -80,7 +80,7 @@ def parse_args():
                         help='whether perform adding meta loss')
     parser.add_argument('--phase', dest='phase',
                         help='the phase of training process',
-                        default=1, type=int)
+                        default=1, type=int) 
     parser.add_argument('--dior_root', dest='dior_root',
                         help='path to DIOR dataset root (contains ImageSets, JPEGImages, Annotations)',
                         default=None, type=str)
@@ -191,24 +191,13 @@ if __name__ == '__main__':
         cfg_from_file(args.cfg_file)
     if args.set_cfgs is not None:
         cfg_from_list(args.set_cfgs)
-
     dior_root = args.dior_root
     if dior_root is None:
-        dior_root = os.path.join(cfg.DATA_DIR, 'DIOR')
-
-    # Resolve and validate DIOR location. If a user accidentally omits the leading
-    # slash (e.g., "autodl-tmp/..." instead of "/autodl-tmp/..."), fall back to
-    # the absolute variant so training can proceed.
+        dior_root = os.path.join(cfg.DATA_DIR, '/root/autodl-tmp/P-CNN-111/P-CNN-main/data/data/DIOR')
     dior_root = os.path.abspath(dior_root)
-    if not os.path.exists(dior_root):
-        alt_dior_root = os.path.abspath('/' + dior_root.lstrip(os.sep))
-        if os.path.exists(alt_dior_root):
-            print('Resolved DIOR dataset root from {} to {}'.format(dior_root, alt_dior_root))
-            dior_root = alt_dior_root
-        else:
-            raise FileNotFoundError('DIOR dataset root not found: {}'.format(dior_root))
-
     cfg.DATA_DIR = os.path.abspath(os.path.join(dior_root, os.pardir))
+    if not os.path.exists(dior_root):
+        raise FileNotFoundError('DIOR dataset root not found: {}'.format(dior_root))
 
     print('Using config:')
     pprint.pprint(cfg)
@@ -252,11 +241,11 @@ if __name__ == '__main__':
             img_set = "train"
 
         if cfg.mask_on:
-            metadataset = ImagePatchDiorMetaDataset(dior_root,
+            metadataset = ImagePatchDiorMetaDataset("/root/autodl-tmp/P-CNN-111/P-CNN-main/data/data/DIOR/",
                                                     img_set, metaclass, img_size, shots=shots, shuffle=True,
                                                     phase=args.phase)
         else:
-            metadataset = DiorMetaDataset(dior_root,
+            metadataset = DiorMetaDataset("/root/autodl-tmp/P-CNN-111/P-CNN-main/data/data/DIOR/",
                                           img_set, metaclass, img_size, shots=shots, shuffle=True, phase=args.phase)
 
         metaloader = torch.utils.data.DataLoader(metadataset, batch_size=1, shuffle=False, num_workers=0,
