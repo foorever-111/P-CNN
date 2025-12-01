@@ -38,7 +38,9 @@ class _fasterRCNN(nn.Module):
         self.RCNN_loss_bbox = 0
 
         # define rpn
-        self.RCNN_rpn = _RPN(self.dout_base_model, self.n_classes)
+        self.RCNN_rpn = _RPN(self.dout_base_model, self.n_classes,
+                             getattr(self, 'proto_dim', 2048), getattr(self, 'ang_dim', 6),
+                             getattr(self, 'lambda_fg', 0.5))
         self.RCNN_proposal_target = _ProposalTargetLayer(self.n_classes)
         self.RCNN_roi_pool = _RoIPooling(cfg.POOLING_SIZE, cfg.POOLING_SIZE, 1.0 / 16.0)
         self.RCNN_roi_align = RoIAlignAvg(cfg.POOLING_SIZE, cfg.POOLING_SIZE, 1.0 / 16.0)
@@ -50,17 +52,18 @@ class _fasterRCNN(nn.Module):
 
     def forward(self, im_data_list, im_info_list, gt_boxes_list, num_boxes_list, average_shot=None,
                 mean_class_attentions=None, img_id=None):
-        # return attentions for testing
+        prototypes = None
         if average_shot:
             prn_data = im_data_list[0]  # len(metaclass)*4*224*224
-            attentions = self.prn_network(prn_data)
-            return attentions
+            prn_cls = im_info_list[0]
+            prototypes = self.prn_network(prn_data, prn_cls)
+            return prototypes
         # extract attentions for training
         if self.meta_train and self.training:
             prn_data = im_data_list[0]  # len(metaclass)*4*224*224
             # feed prn data to prn_network
-            attentions = self.prn_network(prn_data)
             prn_cls = im_info_list[0]  # len(metaclass)
+            prototypes = self.prn_network(prn_data, prn_cls)
 
         im_data = im_data_list[-1]
         im_info = im_info_list[-1]
@@ -76,13 +79,17 @@ class _fasterRCNN(nn.Module):
         base_feat = self.RCNN_base(self.rcnn_conv1(im_data)) #
 
         # feed base feature map tp RPN to obtain rois
+        attn_for_rpn = None
         if cfg.RPN_Attention:
-            if self.training:
-                rois, rpn_loss_cls, rpn_loss_bbox = self.RCNN_rpn(base_feat, im_info, gt_boxes, num_boxes, attentions)
-            else:
-                rois, rpn_loss_cls, rpn_loss_bbox = self.RCNN_rpn(base_feat, im_info, gt_boxes, num_boxes, mean_class_attentions)
-        else:
-            rois, rpn_loss_cls, rpn_loss_bbox = self.RCNN_rpn(base_feat, im_info, gt_boxes, num_boxes)   
+            # 优先使用预先计算的注意力，否则退回到原型向量
+            if prototypes is not None and isinstance(prototypes, dict):
+                attn_for_rpn = prototypes.get('attentions', None)
+                if attn_for_rpn is None and 'P_pure' in prototypes:
+                    attn_for_rpn = prototypes['P_pure']
+            if not self.training and mean_class_attentions is not None:
+                attn_for_rpn = mean_class_attentions
+        rois, rpn_loss_cls, rpn_loss_bbox = self.RCNN_rpn(
+            base_feat, im_info, gt_boxes, num_boxes, attn_for_rpn, prototypes)
 
         # with open('vis/rpnvis{}.pkl'.format(img_id+11726), 'wb') as fw:
         #     pickle.dump(rois, fw)
@@ -121,132 +128,31 @@ class _fasterRCNN(nn.Module):
         # feed pooled features to top model
         pooled_feat = self._head_to_tail(pooled_feat)  # (b*128)*2048
 
-        # meta training phase
-        if self.meta_train and self.use_meta_head:
-            rcnn_loss_cls = []
-            rcnn_loss_bbox = []
-            # pooled feature maps need to operate channel-wise multiplication with the corresponding class's attentions of every roi of image
-            for b in range(batch_size):
-                zero = Variable(torch.FloatTensor([0]).cuda())
-                proposal_labels = rois_label[b * 128:(b + 1) * 128].data.cpu().numpy()[0]
-                unique_labels = list(np.unique(proposal_labels)) # the unique rois labels of the input image
-                for i in range(attentions.size(0)):  # attentions len(attentions/meta_classes)*2048
-                    if prn_cls[i].numpy()[0] + 1 not in unique_labels:
-                        rcnn_loss_cls.append(zero)
-                        rcnn_loss_bbox.append(zero)
-                        continue
-                    channel_wise_feat = pooled_feat[b * cfg.TRAIN.BATCH_SIZE:(b + 1) * cfg.TRAIN.BATCH_SIZE, :] * \
-                                        attentions[i]  # 128x2048 channel-wise multiple
-                    bbox_pred = self.RCNN_bbox_pred(channel_wise_feat)  # 128 * 4
-                    if self.training and not self.class_agnostic:
-                        # select the corresponding columns according to roi labels
-                        bbox_pred_view = bbox_pred.view(bbox_pred.size(0), int(bbox_pred.size(1) / 4), 4)
-                        bbox_pred_select = torch.gather(bbox_pred_view, 1,
-                                                        rois_label[
-                                                        b * cfg.TRAIN.BATCH_SIZE:(b + 1) * cfg.TRAIN.BATCH_SIZE].view(
-                                                            rois_label[b * cfg.TRAIN.BATCH_SIZE:(
-                                                                                                        b + 1) * cfg.TRAIN.BATCH_SIZE].size(
-                                                                0), 1, 1).expand(
-                                                            rois_label[b * cfg.TRAIN.BATCH_SIZE:(
-                                                                                                        b + 1) * cfg.TRAIN.BATCH_SIZE].size(
-                                                                0), 1,
-                                                            4))
-                        bbox_pred = bbox_pred_select.squeeze(1)
-                    # compute object classification probability
-                    cls_score = self.RCNN_cls_score(channel_wise_feat)  # 128 * 21
+        cls_score, bbox_pred = self.apply_prototype_attention(pooled_feat, prototypes)
 
-                    if self.training:
-                        # classification loss
-                        RCNN_loss_cls = F.cross_entropy(cls_score, rois_label[b * 128:(b + 1) * 128])
-                        rcnn_loss_cls.append(RCNN_loss_cls)
-                        # bounding box regression L1 lossvcd
-                        RCNN_loss_bbox = _smooth_l1_loss(bbox_pred, rois_target[b * 128:(b + 1) * 128],
-                                                         rois_inside_ws[b * 128:(b + 1) * 128],
-                                                         rois_outside_ws[b * 128:(b + 1) * 128])
+        if self.training and not self.class_agnostic:
+            bbox_pred_view = bbox_pred.view(bbox_pred.size(0), int(bbox_pred.size(1) / 4), 4)
+            bbox_pred_select = torch.gather(bbox_pred_view, 1,
+                                            rois_label.view(rois_label.size(0), 1, 1).expand(rois_label.size(0), 1, 4))
+            bbox_pred = bbox_pred_select.squeeze(1)
 
-                        rcnn_loss_bbox.append(RCNN_loss_bbox)
-            # meta attentions loss
-            if self.meta_loss:
-                attentions_score = self.Meta_cls_score(attentions)
-                meta_loss = F.cross_entropy(attentions_score, Variable(torch.cat(prn_cls,dim=0).cuda()))
-            else:
-                meta_loss = 0
+        cls_prob = F.softmax(cls_score)
 
-            return rois, rpn_loss_cls, rpn_loss_bbox, rcnn_loss_cls, rcnn_loss_bbox, rois_label, 0, 0, meta_loss
+        RCNN_loss_cls = 0
+        RCNN_loss_bbox = 0
+        meta_loss = prototypes['L_dec'] if prototypes is not None and 'L_dec' in prototypes else 0
 
-        elif self.meta_test and self.use_meta_head:
-            cls_prob_list = []
-            bbox_pred_list = []
-            for i in range(len(mean_class_attentions)):
-                mean_attentions = mean_class_attentions[i]
-                channel_wise_feat = pooled_feat * mean_attentions
-                # compute bbox offset
-                bbox_pred = self.RCNN_bbox_pred(channel_wise_feat)
-                if self.training and not self.class_agnostic:
-                    # select the corresponding columns according to roi labels
-                    bbox_pred_view = bbox_pred.view(bbox_pred.size(0), int(bbox_pred.size(1) / 4), 4)
-                    bbox_pred_select = torch.gather(bbox_pred_view, 1,
-                                                    rois_label.view(rois_label.size(0), 1, 1).expand(rois_label.size(0),
-                                                                                                     1, 4))
-                    bbox_pred = bbox_pred_select.squeeze(1)
+        if self.training:
+            RCNN_loss_cls = F.cross_entropy(cls_score, rois_label)
+            RCNN_loss_bbox = _smooth_l1_loss(bbox_pred, rois_target, rois_inside_ws, rois_outside_ws)
 
-                # compute object classification probability
-                cls_score = self.RCNN_cls_score(channel_wise_feat)
-                cls_prob = F.softmax(cls_score)
-
-                RCNN_loss_cls = 0
-                RCNN_loss_bbox = 0
-
-                if self.training:
-                    # classification loss
-                    RCNN_loss_cls = F.cross_entropy(cls_score, rois_label)
-                    # bounding box regression L1 loss
-                    RCNN_loss_bbox = _smooth_l1_loss(bbox_pred, rois_target, rois_inside_ws, rois_outside_ws)
-
-                cls_prob = cls_prob.view(batch_size, rois.size(1), -1)
-                bbox_pred = bbox_pred.view(batch_size, rois.size(1), -1)
-                cls_prob_list.append(cls_prob)
-                bbox_pred_list.append(bbox_pred)
-
-            return rois, rpn_loss_cls, rpn_loss_bbox, RCNN_loss_cls, RCNN_loss_bbox, rois_label, cls_prob_list, bbox_pred_list, 0
-        else:
-            bbox_pred = self.RCNN_bbox_pred(pooled_feat)
-            if self.training and not self.class_agnostic:
-                # select the corresponding columns according to roi labels
-                bbox_pred_view = bbox_pred.view(bbox_pred.size(0), int(bbox_pred.size(1) / 4), 4)
-                bbox_pred_select = torch.gather(bbox_pred_view, 1,
-                                                rois_label.view(rois_label.size(0), 1, 1).expand(rois_label.size(0), 1,
-                                                                                                 4))
-                bbox_pred = bbox_pred_select.squeeze(1)
-
-            # compute object classification probability
-            cls_score = self.RCNN_cls_score(pooled_feat)  # 128 * 1001
-            cls_prob = F.softmax(cls_score)
-
-            RCNN_loss_cls = 0
-            RCNN_loss_bbox = 0
-
-            # meta attentions loss
-            if self.meta_loss and self.training:
-                attentions_score = self.Meta_cls_score(attentions)
-                meta_loss = F.cross_entropy(attentions_score, Variable(torch.cat(prn_cls,dim=0).cuda()))
-            else:
-                meta_loss = 0
-
-            if self.training:
-                # classification loss
-                RCNN_loss_cls = F.cross_entropy(cls_score, rois_label)
-
-                # bounding box regression L1 loss
-                RCNN_loss_bbox = _smooth_l1_loss(bbox_pred, rois_target, rois_inside_ws, rois_outside_ws)
-
-            cls_prob = cls_prob.view(batch_size, rois.size(1), -1)
-            bbox_pred = bbox_pred.view(batch_size, rois.size(1), -1)
+        cls_prob = cls_prob.view(batch_size, rois.size(1), -1)
+        bbox_pred = bbox_pred.view(batch_size, rois.size(1), -1)
 
         if self.training:
             return rois, rpn_loss_cls, rpn_loss_bbox, RCNN_loss_cls, RCNN_loss_bbox, rois_label, 0, 0, meta_loss
         else:
-            return rois, rpn_loss_cls, rpn_loss_bbox, RCNN_loss_cls, RCNN_loss_bbox, rois_label, cls_prob, bbox_pred, 0
+            return rois, rpn_loss_cls, rpn_loss_bbox, RCNN_loss_cls, RCNN_loss_bbox, rois_label, cls_prob, bbox_pred, meta_loss
 
     def _init_weights(self):
         def normal_init(m, mean, stddev, truncated=False):
@@ -265,6 +171,16 @@ class _fasterRCNN(nn.Module):
         normal_init(self.RCNN_rpn.RPN_bbox_pred, 0, 0.01, cfg.TRAIN.TRUNCATED)
         normal_init(self.RCNN_cls_score, 0, 0.01, cfg.TRAIN.TRUNCATED)
         normal_init(self.RCNN_bbox_pred, 0, 0.001, cfg.TRAIN.TRUNCATED)
+        if hasattr(self, 'fc_proto'):
+            normal_init(self.fc_proto, 0, 0.01, cfg.TRAIN.TRUNCATED)
+        if hasattr(self, 'conv_angle'):
+            normal_init(self.conv_angle, 0, 0.01, cfg.TRAIN.TRUNCATED)
+        if hasattr(self, 'fc_ang_proj'):
+            normal_init(self.fc_ang_proj, 0, 0.01, cfg.TRAIN.TRUNCATED)
+        if hasattr(self, 'fc_att'):
+            normal_init(self.fc_att, 0, 0.01, cfg.TRAIN.TRUNCATED)
+        if hasattr(self, 'proto_cls_score'):
+            normal_init(self.proto_cls_score, 0, 0.01, cfg.TRAIN.TRUNCATED)
 
     def create_architecture(self):
         self._init_modules()

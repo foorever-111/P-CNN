@@ -35,14 +35,14 @@ except NameError:
     xrange = range  # Python 3
 
 class dior(imdb):
-    def __init__(self, image_set, devkit_path="/home/hy/dataset/DIOR"):
+    def __init__(self, image_set, devkit_path=None):
         if cfg.Test_Subdataset:
             image_set = 'test_100'
         imdb.__init__(self, 'dior_' + image_set)
         self._image_set = image_set
         self._devkit_path = self._get_default_path() if devkit_path is None \
             else devkit_path
-        self._data_path = '/home/hy/dataset/DIOR/'
+        self._data_path = self._devkit_path
 
         #first split
         if cfg.TRAIN.META_TYPE == 1:
@@ -77,7 +77,7 @@ class dior(imdb):
                        'min_size': 2}
 
         assert os.path.exists(self._devkit_path), \
-            'VOCdevkit path does not exist: {}'.format(self._devkit_path)
+            'DIOR path does not exist: {}'.format(self._devkit_path)
         assert os.path.exists(self._data_path), \
             'Path does not exist: {}'.format(self._data_path)
 
@@ -122,7 +122,7 @@ class dior(imdb):
         """
         Return the default path where PASCAL VOC is expected to be installed.
         """
-        return os.path.join(cfg.DATA_DIR, 'VOCdevkit2007')
+        return os.path.join(cfg.DATA_DIR, 'DIOR')
 
     def gt_roidb(self):
 

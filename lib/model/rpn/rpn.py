@@ -33,7 +33,7 @@ class AttentionsMerge(nn.Module):
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, attentions):
-        
+
         # merge_list = []
         # for attention in attentions:
         #     attention = attention.unsqueeze(dim=0)
@@ -42,9 +42,24 @@ class AttentionsMerge(nn.Module):
         # mergedattention = self.merge(merge_list)
         # mergedattention = self.sigmoid(mergedattention)
 
-        attentionSum = 0
-        for i in range(1, len(attentions)):
-            attentionSum += attentions[i]
+        # 支持 list/tuple、tensor（C x D）或 dict {cls_id: att}
+        attentionSum = None
+        if attentions is None:
+            raise ValueError('attentions is None in AttentionsMerge.forward')
+        if torch.is_tensor(attentions):
+            attentionSum = attentions.sum(dim=0)
+        elif isinstance(attentions, (list, tuple)):
+            for att in attentions:
+                attentionSum = att if attentionSum is None else attentionSum + att
+        elif isinstance(attentions, dict):
+            for att in attentions.values():
+                attentionSum = att if attentionSum is None else attentionSum + att
+        else:
+            raise TypeError('Unsupported attentions type: {}'.format(type(attentions)))
+
+        if attentionSum is None:
+            raise ValueError('No valid attentions provided to merge')
+
         mergedattention = self.merge(attentionSum)
         mergedattention = self.sigmoid(mergedattention)
 
@@ -76,13 +91,16 @@ class Attention2Weights(nn.Module):
 
 class _RPN(nn.Module):
     """ region proposal network """
-    def __init__(self, din, num_classes):
+    def __init__(self, din, num_classes, proto_dim=2048, ang_dim=6, lambda_fg=0.5):
         super(_RPN, self).__init__()
-        
+
         self.din = din  # get depth of input feature map, e.g., 512
         self.anchor_scales = cfg.ANCHOR_SCALES
         self.anchor_ratios = cfg.ANCHOR_RATIOS
         self.feat_stride = cfg.FEAT_STRIDE[0]
+        self.proto_dim = proto_dim
+        self.ang_dim = ang_dim
+        self.lambda_fg = lambda_fg
 
         # define the convrelu layers processing input feature map
         self.RPN_Conv = nn.Conv2d(self.din, 512, 3, 1, 1, bias=True)
@@ -98,11 +116,20 @@ class _RPN(nn.Module):
         # in_channel：attention向量的维度1024 out_channel：先试试看512
         self.Class_Attention_Conv = Attention2Weights(in_channel=1024, out_channel=self.nc_score_out, kernel_size=1)
 
+        # prototype-guided foreground scoring
+        self.fc_rpn_proto = nn.Linear(512, self.proto_dim)
+        self.g_ang = nn.Sequential(
+            nn.Linear(512 + self.ang_dim, 512),
+            nn.ReLU(inplace=True),
+            nn.Linear(512, 1),
+            nn.Sigmoid()
+        )
+
         # define anchor box offset prediction layer
         self.nc_bbox_out = len(self.anchor_scales) * len(self.anchor_ratios) * 4 # 4(coords) * 9 (anchors)
         self.RPN_bbox_pred = nn.Conv2d(512, self.nc_bbox_out, 1, 1, 0)
 
-        # define proposal layer 
+        # define proposal layer
         self.RPN_proposal = _ProposalLayer(self.feat_stride, self.anchor_scales, self.anchor_ratios)
 
         # define anchor target layer
@@ -122,14 +149,24 @@ class _RPN(nn.Module):
         )
         return x
 
-    def forward(self, base_feat, im_info, gt_boxes, num_boxes, attentions=None):
+    def forward(self, base_feat, im_info, gt_boxes, num_boxes, attentions=None, prototypes=None):
 
         batch_size = base_feat.size(0)
 
         # return feature map after convrelu layer
-        rpn_conv1 = F.relu(self.RPN_Conv(base_feat), inplace=True) 
+        rpn_conv1 = F.relu(self.RPN_Conv(base_feat), inplace=True)
+
+        if prototypes is not None and prototypes.get('P_ang') is not None:
+            P_ang = prototypes['P_ang']
+            P_ep_ang = P_ang.mean(dim=0).detach()
+            spatial = rpn_conv1.permute(0, 2, 3, 1).contiguous().view(-1, 512)
+            gate_in = torch.cat([spatial, P_ep_ang.unsqueeze(0).expand(spatial.size(0), -1)], dim=1)
+            alpha = self.g_ang(gate_in).view(rpn_conv1.size(0), rpn_conv1.size(2), rpn_conv1.size(3), 1)
+            alpha = alpha.permute(0, 3, 1, 2).contiguous()
+            rpn_conv1 = rpn_conv1 * alpha
+
         # get rpn classification score
-        rpn_cls_score = self.RPN_cls_score(rpn_conv1) 
+        rpn_cls_score = self.RPN_cls_score(rpn_conv1)
 
         # 原版metarcnn需要把下面注释掉，改进版需要解注释
         # 在这里加上残差模块
@@ -139,6 +176,16 @@ class _RPN(nn.Module):
             Atten_Score = nn.functional.conv2d(rpn_conv1, weights)
             rpn_cls_score = rpn_cls_score * Atten_Score + rpn_cls_score
 
+        if prototypes is not None and prototypes.get('P_pure') is not None:
+            P_pure = prototypes['P_pure'].detach()
+            spatial = rpn_conv1.permute(0, 2, 3, 1).contiguous().view(-1, 512)
+            proj = self.fc_rpn_proto(spatial)
+            sim = torch.matmul(proj, P_pure.t())
+            s_proto, _ = sim.max(dim=1)
+            s_proto = s_proto.view(rpn_conv1.size(0), 1, rpn_conv1.size(2), rpn_conv1.size(3))
+            proto_map = torch.zeros_like(rpn_cls_score)
+            proto_map[:, 1::2, :, :] = self.lambda_fg * s_proto
+            rpn_cls_score = rpn_cls_score + proto_map
 
         rpn_cls_score_reshape = self.reshape(rpn_cls_score, 2)
         rpn_cls_prob_reshape = F.softmax(rpn_cls_score_reshape,dim=1)

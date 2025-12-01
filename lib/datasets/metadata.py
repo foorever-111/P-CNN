@@ -277,66 +277,44 @@ class ImagePatchDiorMetaDataset(data.Dataset):
         self.prndata = []
         self.prncls = []
         prn_image = self.get_prndata()
-        for i in range(shots):
-            cls = []
-            data = []
-            for n, key in enumerate(list(prn_image.keys())):
-                img = torch.from_numpy(np.array(prn_image[key][i]))                 #img = torch.from_numpy(np.array(prn_image[key][i * 6]))
-                img = img.unsqueeze(0)
-                data.append(img.permute(0, 3, 1, 2).contiguous())
-                cls.append(class_to_idx[key])
-            self.prncls.append(cls)
-            self.prndata.append(torch.cat(data,dim=0)) 
 
-            cls = []
-            data = []
-            for n, key in enumerate(list(prn_image.keys())):
-                img = torch.from_numpy(np.array(prn_image[key][i * 6 + 1]))
-                img = img.unsqueeze(0)
-                data.append(img.permute(0, 3, 1, 2).contiguous())
-                cls.append(class_to_idx[key])
-            self.prncls.append(cls)
-            self.prndata.append(torch.cat(data,dim=0))
+        # Each selected instance produces six rotated patches; make sure we only
+        # index the available ones to avoid missing-angle crashes when a class
+        # has fewer valid instances than requested.
+        per_class_counts = []
+        for key, patches in prn_image.items():
+            per_class_counts.append(len(patches) // 6)
+        if not per_class_counts or min(per_class_counts) == 0:
+            raise ValueError(
+                "No valid DIOR support patches found; check ImageSets/Main split and Annotations"
+            )
 
-            cls = []
-            data = []
-            for n, key in enumerate(list(prn_image.keys())):
-                img = torch.from_numpy(np.array(prn_image[key][i * 6 + 2]))
-                img = img.unsqueeze(0)
-                data.append(img.permute(0, 3, 1, 2).contiguous())
-                cls.append(class_to_idx[key])
-            self.prncls.append(cls)
-            self.prndata.append(torch.cat(data,dim=0))
+        usable_shots = min(self.shots, min(per_class_counts))
 
+        for i in range(usable_shots):
+            # original patch
             cls = []
             data = []
-            for n, key in enumerate(list(prn_image.keys())):
-                img = torch.from_numpy(np.array(prn_image[key][i * 6 + 3]))
+            for key in prn_image.keys():
+                img = torch.from_numpy(np.array(prn_image[key][i * 6]))
                 img = img.unsqueeze(0)
                 data.append(img.permute(0, 3, 1, 2).contiguous())
                 cls.append(class_to_idx[key])
             self.prncls.append(cls)
-            self.prndata.append(torch.cat(data,dim=0))
+            self.prndata.append(torch.cat(data, dim=0))
 
-            cls = []
-            data = []
-            for n, key in enumerate(list(prn_image.keys())):
-                img = torch.from_numpy(np.array(prn_image[key][i * 6 + 4]))
-                img = img.unsqueeze(0)
-                data.append(img.permute(0, 3, 1, 2).contiguous())
-                cls.append(class_to_idx[key])
-            self.prncls.append(cls)
-            self.prndata.append(torch.cat(data,dim=0))
-
-            cls = []
-            data = []
-            for n, key in enumerate(list(prn_image.keys())):
-                img = torch.from_numpy(np.array(prn_image[key][i * 6 + 5]))
-                img = img.unsqueeze(0)
-                data.append(img.permute(0, 3, 1, 2).contiguous())
-                cls.append(class_to_idx[key])
-            self.prncls.append(cls)
-            self.prndata.append(torch.cat(data,dim=0))
+            # five rotated variants
+            for offset in range(1, 6):
+                cls = []
+                data = []
+                for key in prn_image.keys():
+                    idx = i * 6 + offset
+                    img = torch.from_numpy(np.array(prn_image[key][idx]))
+                    img = img.unsqueeze(0)
+                    data.append(img.permute(0, 3, 1, 2).contiguous())
+                    cls.append(class_to_idx[key])
+                self.prncls.append(cls)
+                self.prndata.append(torch.cat(data, dim=0))
 
 
     def __getitem__(self, index):

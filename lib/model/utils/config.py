@@ -29,6 +29,14 @@ __C.TRAIN.META_TYPE = 1
 
 __C.mask_on = False
 
+# Prototype decoupling and angle-aware settings
+__C.PROTO = edict()
+__C.PROTO.DIM = 2048
+__C.PROTO.D_THETA = 6
+__C.PROTO.TOP_M = -1
+__C.PROTO.LAMBDA_DEC = 0.1
+__C.PROTO.LAMBDA_FG = 0.5
+
 __C.Test_Subdataset = False
 ##### set classes ###
 __C.TRAIN.ALLCLASSES_FIRST = [ 'airplane', 'airport', 'dam', 'Expressway-Service-area', 'Expressway-toll-station',
@@ -111,7 +119,7 @@ __C.TRAIN.SUMMARY_INTERVAL = 180
 
 # Scale to use during training (can list multiple scales)
 # The scale is the pixel size of an image's shortest side
-__C.TRAIN.SCALES = (600,)
+__C.TRAIN.SCALES = [600]
 
 # Max pixel size of the longest side of a scaled input image
 __C.TRAIN.MAX_SIZE = 1000
@@ -217,7 +225,7 @@ __C.TEST = edict()
 
 # Scale to use during testing (can NOT list multiple scales)
 # The scale is the pixel size of an image's shortest side
-__C.TEST.SCALES = (600,)
+__C.TEST.SCALES = [600]
 
 # Max pixel size of the longest side of a scaled input image
 __C.TEST.MAX_SIZE = 1000
