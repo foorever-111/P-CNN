@@ -79,13 +79,17 @@ class _fasterRCNN(nn.Module):
         base_feat = self.RCNN_base(self.rcnn_conv1(im_data)) #
 
         # feed base feature map tp RPN to obtain rois
+        attn_for_rpn = None
         if cfg.RPN_Attention:
-            if self.training:
-                rois, rpn_loss_cls, rpn_loss_bbox = self.RCNN_rpn(base_feat, im_info, gt_boxes, num_boxes, prototypes, prototypes)
-            else:
-                rois, rpn_loss_cls, rpn_loss_bbox = self.RCNN_rpn(base_feat, im_info, gt_boxes, num_boxes, mean_class_attentions, prototypes)
-        else:
-            rois, rpn_loss_cls, rpn_loss_bbox = self.RCNN_rpn(base_feat, im_info, gt_boxes, num_boxes, None, prototypes)
+            # 优先使用预先计算的注意力，否则退回到原型向量
+            if prototypes is not None and isinstance(prototypes, dict):
+                attn_for_rpn = prototypes.get('attentions', None)
+                if attn_for_rpn is None and 'P_pure' in prototypes:
+                    attn_for_rpn = prototypes['P_pure']
+            if not self.training and mean_class_attentions is not None:
+                attn_for_rpn = mean_class_attentions
+        rois, rpn_loss_cls, rpn_loss_bbox = self.RCNN_rpn(
+            base_feat, im_info, gt_boxes, num_boxes, attn_for_rpn, prototypes)
 
         # with open('vis/rpnvis{}.pkl'.format(img_id+11726), 'wb') as fw:
         #     pickle.dump(rois, fw)

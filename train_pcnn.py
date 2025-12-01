@@ -527,10 +527,15 @@ if __name__ == '__main__':
             im_data = Variable(im_data, volatile=True)
             im_data.data.resize_(prndata.squeeze(0).size()).copy_(prndata.squeeze(0))
             im_data_list.append(im_data)
-            attentions = fasterRCNN(im_data_list, im_info_list, gt_boxes_list, num_boxes_list,
+            proto_outputs = fasterRCNN(im_data_list, im_info_list, gt_boxes_list, num_boxes_list,
                                             average_shot=True)
+            att_source = proto_outputs.get('attentions') if isinstance(proto_outputs, dict) else proto_outputs
+            if att_source is None and isinstance(proto_outputs, dict) and 'P_pure' in proto_outputs:
+                att_source = proto_outputs['P_pure']
+            if att_source is None:
+                raise ValueError('No attention/prototype outputs available for meta attention export')
             for idx, cls in enumerate(prncls):
-                class_attentions[int(cls)].append(attentions[idx])
+                class_attentions[int(cls)].append(att_source[idx])
         # calculate mean attention vectors of every class
         mean_class_attentions = {k: sum(v) / len(v) for k, v in class_attentions.items()}
         save_path = args.save_dir #'attentions'

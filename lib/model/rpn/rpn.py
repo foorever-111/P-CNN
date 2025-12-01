@@ -33,7 +33,7 @@ class AttentionsMerge(nn.Module):
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, attentions):
-        
+
         # merge_list = []
         # for attention in attentions:
         #     attention = attention.unsqueeze(dim=0)
@@ -42,9 +42,24 @@ class AttentionsMerge(nn.Module):
         # mergedattention = self.merge(merge_list)
         # mergedattention = self.sigmoid(mergedattention)
 
-        attentionSum = 0
-        for i in range(1, len(attentions)):
-            attentionSum += attentions[i]
+        # 支持 list/tuple、tensor（C x D）或 dict {cls_id: att}
+        attentionSum = None
+        if attentions is None:
+            raise ValueError('attentions is None in AttentionsMerge.forward')
+        if torch.is_tensor(attentions):
+            attentionSum = attentions.sum(dim=0)
+        elif isinstance(attentions, (list, tuple)):
+            for att in attentions:
+                attentionSum = att if attentionSum is None else attentionSum + att
+        elif isinstance(attentions, dict):
+            for att in attentions.values():
+                attentionSum = att if attentionSum is None else attentionSum + att
+        else:
+            raise TypeError('Unsupported attentions type: {}'.format(type(attentions)))
+
+        if attentionSum is None:
+            raise ValueError('No valid attentions provided to merge')
+
         mergedattention = self.merge(attentionSum)
         mergedattention = self.sigmoid(mergedattention)
 
