@@ -9,7 +9,7 @@ from __future__ import print_function
 import _init_paths
 import os
 os.environ['CUDA_DEVICE_ORDER'] = 'PCI_BUS_ID'
-os.environ['CUDA_VISIBLE_DEVICES'] = '3'
+os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 import sys
 import numpy as np
 import argparse
@@ -142,20 +142,11 @@ if __name__ == '__main__':
 
     dior_root = args.dior_root
     if dior_root is None:
-        dior_root = os.path.join(cfg.DATA_DIR, 'DIOR')
-
-    # Resolve dataset path; if the user supplied a relative path without a leading
-    # slash, attempt the absolute form before failing loudly.
+        dior_root = os.path.join(cfg.DATA_DIR, '/root/autodl-tmp/P-CNN-111/P-CNN-main/data/data/DIOR')
     dior_root = os.path.abspath(dior_root)
-    if not os.path.exists(dior_root):
-        alt_dior_root = os.path.abspath('/' + dior_root.lstrip(os.sep))
-        if os.path.exists(alt_dior_root):
-            print('Resolved DIOR dataset root from {} to {}'.format(dior_root, alt_dior_root))
-            dior_root = alt_dior_root
-        else:
-            raise FileNotFoundError('DIOR dataset root not found: {}'.format(dior_root))
-
     cfg.DATA_DIR = os.path.abspath(os.path.join(dior_root, os.pardir))
+    if not os.path.exists(dior_root):
+        raise FileNotFoundError('DIOR dataset root not found: {}'.format(dior_root))
 
     cfg.RESULT_DIR = args.load_dir
 
@@ -425,7 +416,7 @@ if __name__ == '__main__':
 
     print('Evaluating detections')
 
-    imdb.evaluate_detections(all_boxes, output_dir, **vars(args))
+    imdb.evaluate_detections(all_boxes, '/root/autodl-tmp/P-CNN-111/P-CNN-main/output/ours_split1_3shot/', **vars(args))
 
     end = time.time()
     print("test time: %0.4fs" % (end - start))
