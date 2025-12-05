@@ -9,7 +9,7 @@ from __future__ import print_function
 import _init_paths
 import os
 os.environ['CUDA_DEVICE_ORDER'] = 'PCI_BUS_ID'
-os.environ['CUDA_VISIBLE_DEVICES'] = '3'
+os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 import sys
 import numpy as np
 import argparse
@@ -29,6 +29,7 @@ from lib.model.rpn.bbox_transform import clip_boxes
 from lib.model.nms.nms_wrapper import nms
 from lib.model.rpn.bbox_transform import bbox_transform_inv
 from lib.model.utils.net_utils import save_net, load_net, vis_detections, vis_detections_label_only, vis_rpn_proposals
+from lib.model.faster_rcnn.resnet import resnet
 
 from matplotlib import pyplot as plt
 import torch.utils.data as Data
@@ -405,7 +406,7 @@ if __name__ == '__main__':
 
     print('Evaluating detections')
 
-    imdb.evaluate_detections(all_boxes, '/home/hy/Code/MetaR-CNN/output/ours_split1_3shot/', **vars(args))
+    imdb.evaluate_detections(all_boxes, '/root/autodl-tmp/P-CNN-yuan/P-CNN-main/output/ours_split1_3shot/', **vars(args))
 
     end = time.time()
     print("test time: %0.4fs" % (end - start))
