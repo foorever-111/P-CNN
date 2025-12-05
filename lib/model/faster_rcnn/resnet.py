@@ -332,3 +332,56 @@ class resnet(_fasterRCNN):
     feature = self._head_to_tail(self.max_pooled(base_feat)) # self.max_pooled(base_feat)->len(meta_classes) * 1024 * 7 * 7
     attentions = self.sigmoid(feature)
     return  attentions
+
+
+class ACDPrototypecnn(resnet):
+  """
+  PrototypeCNN variant with angle-class decoupling and dual-guidance modulation.
+  """
+  def __init__(self, classes, num_layers=101, pretrained=False, class_agnostic=False, meta_train=True, meta_test=None, meta_loss=None):
+    super(ACDPrototypecnn, self).__init__(classes, num_layers=num_layers, pretrained=pretrained,
+                                         class_agnostic=class_agnostic, meta_train=meta_train,
+                                         meta_test=meta_test, meta_loss=meta_loss)
+    # prototype branches
+    self.proto_cls_fc = nn.Linear(2048, 2048)
+    self.angle_conv = nn.Conv2d(self.dout_base_model, self.dout_base_model, kernel_size=3, padding=1)
+    self.angle_fc = nn.Linear(self.dout_base_model, 2048)
+    self.decouple_fc = nn.Linear(2048, 2048)
+    self.geo_fc = nn.Linear(2048, 2048)
+    self.w_sem = nn.Parameter(torch.tensor(1.0))
+    self.w_geo = nn.Parameter(torch.tensor(1.0))
+    self.scale = nn.Parameter(torch.tensor(10.0))
+    self.lambda_decouple = 0.01
+
+  def prn_network(self, im_data):
+    if cfg.mask_on:
+      base_feat = self.RCNN_base(self.rcnn_conv1(im_data))
+    else:
+      base_feat = self.RCNN_base(self.meta_conv1(im_data))
+
+    pooled_base = self.max_pooled(base_feat)
+    feature = self._head_to_tail(pooled_base)
+    p_cls = self.proto_cls_fc(feature)
+
+    angle_feat = self.angle_conv(base_feat)
+    angle_vec = F.adaptive_avg_pool2d(angle_feat, 1).view(angle_feat.size(0), -1)
+    p_ang = self.angle_fc(angle_vec)
+
+    cos_sim = (p_cls * p_ang).sum(1, keepdim=True) / (
+        (p_cls.norm(2, 1, keepdim=True) * p_ang.norm(2, 1, keepdim=True)) + 1e-6)
+    p_ang_norm = p_ang / (p_ang.norm(2, 1, keepdim=True) + 1e-6)
+    proj = cos_sim * p_ang_norm * (p_cls.norm(2, 1, keepdim=True))
+    p_cls_dec = p_cls - proj
+    p_cls_dec = self.decouple_fc(p_cls_dec)
+
+    self.last_p_cls = p_cls_dec
+    self.last_p_ang = p_ang
+    return p_cls_dec, p_ang
+
+  def compute_decouple_loss(self):
+    if not hasattr(self, 'last_p_cls') or not hasattr(self, 'last_p_ang'):
+      return torch.tensor(0.0, device=self.rcnn_conv1.weight.device)
+    p_cls = self.last_p_cls
+    p_ang = self.last_p_ang
+    cos_sim = (p_cls * p_ang).sum(1) / ((p_cls.norm(2, 1) * p_ang.norm(2, 1)) + 1e-6)
+    return (cos_sim ** 2).mean()

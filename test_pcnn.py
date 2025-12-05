@@ -159,6 +159,10 @@ if __name__ == '__main__':
     if args.net == 'Prototypecnn':
         fasterRCNN = resnet(imdb.classes, 101, pretrained=False, class_agnostic=args.class_agnostic, meta_train=False,
                             meta_test=args.meta_test, meta_loss=args.meta_loss)
+    elif args.net == 'ACDPrototypecnn':
+        from lib.model.faster_rcnn.resnet import ACDPrototypecnn
+        fasterRCNN = ACDPrototypecnn(imdb.classes, 101, pretrained=False, class_agnostic=args.class_agnostic, meta_train=False,
+                                     meta_test=args.meta_test, meta_loss=args.meta_loss)
     else:
         print('No module define')
 

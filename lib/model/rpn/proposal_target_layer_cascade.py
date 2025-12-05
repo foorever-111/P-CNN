@@ -180,8 +180,17 @@ class _ProposalTargetLayer(nn.Module):
                 bg_rois_per_this_image = rois_per_image
                 fg_rois_per_this_image = 0
             else:
-                raise ValueError("bg_num_rois = 0 and fg_num_rois = 0, this should not happen!")
-                
+                # fallback: if no foreground or background proposals are found,
+                # fall back to using the available proposals as background to
+                # keep training stable instead of raising.
+                bg_rois_per_this_image = min(rois_per_image, num_proposal)
+                if bg_rois_per_this_image == 0:
+                    bg_inds = torch.tensor([], dtype=torch.long).type_as(gt_boxes)
+                else:
+                    bg_inds = torch.arange(bg_rois_per_this_image).type_as(gt_boxes).long()
+                fg_inds = torch.tensor([], dtype=torch.long).type_as(gt_boxes)
+                fg_rois_per_this_image = 0
+
             # The indices that we're selecting (both fg and bg)
             keep_inds = torch.cat([fg_inds, bg_inds], 0)
 

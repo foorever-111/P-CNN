@@ -50,6 +50,7 @@ class _fasterRCNN(nn.Module):
 
     def forward(self, im_data_list, im_info_list, gt_boxes_list, num_boxes_list, average_shot=None,
                 mean_class_attentions=None, img_id=None):
+        attentions = None
         # return attentions for testing
         if average_shot:
             prn_data = im_data_list[0]  # len(metaclass)*4*224*224
@@ -76,13 +77,17 @@ class _fasterRCNN(nn.Module):
         base_feat = self.RCNN_base(self.rcnn_conv1(im_data)) #
 
         # feed base feature map tp RPN to obtain rois
+        sem_attentions, ang_attentions = (attentions, None) if not isinstance(attentions, tuple) else attentions
         if cfg.RPN_Attention:
             if self.training:
-                rois, rpn_loss_cls, rpn_loss_bbox = self.RCNN_rpn(base_feat, im_info, gt_boxes, num_boxes, attentions)
+                rois, rpn_loss_cls, rpn_loss_bbox = self.RCNN_rpn(base_feat, im_info, gt_boxes, num_boxes, sem_attentions, ang_attentions)
             else:
-                rois, rpn_loss_cls, rpn_loss_bbox = self.RCNN_rpn(base_feat, im_info, gt_boxes, num_boxes, mean_class_attentions)
+                mean_sem, mean_ang = (mean_class_attentions, None)
+                if isinstance(mean_class_attentions, tuple):
+                    mean_sem, mean_ang = mean_class_attentions
+                rois, rpn_loss_cls, rpn_loss_bbox = self.RCNN_rpn(base_feat, im_info, gt_boxes, num_boxes, mean_sem, mean_ang)
         else:
-            rois, rpn_loss_cls, rpn_loss_bbox = self.RCNN_rpn(base_feat, im_info, gt_boxes, num_boxes)   
+            rois, rpn_loss_cls, rpn_loss_bbox = self.RCNN_rpn(base_feat, im_info, gt_boxes, num_boxes)
 
         # with open('vis/rpnvis{}.pkl'.format(img_id+11726), 'wb') as fw:
         #     pickle.dump(rois, fw)
@@ -130,13 +135,19 @@ class _fasterRCNN(nn.Module):
                 zero = Variable(torch.FloatTensor([0]).cuda())
                 proposal_labels = rois_label[b * 128:(b + 1) * 128].data.cpu().numpy()[0]
                 unique_labels = list(np.unique(proposal_labels)) # the unique rois labels of the input image
-                for i in range(attentions.size(0)):  # attentions len(attentions/meta_classes)*2048
+                sem_att = sem_attentions if sem_attentions is not None else attentions
+                ang_att = ang_attentions
+                for i in range(sem_att.size(0)):  # attentions len(attentions/meta_classes)*2048
                     if prn_cls[i].numpy()[0] + 1 not in unique_labels:
                         rcnn_loss_cls.append(zero)
                         rcnn_loss_bbox.append(zero)
                         continue
-                    channel_wise_feat = pooled_feat[b * cfg.TRAIN.BATCH_SIZE:(b + 1) * cfg.TRAIN.BATCH_SIZE, :] * \
-                                        attentions[i]  # 128x2048 channel-wise multiple
+                    sem_vec = F.normalize(sem_att[i], dim=0)
+                    fused_attention = 1 + torch.sigmoid(getattr(self, 'w_sem', 1.0) * sem_vec)
+                    if ang_att is not None:
+                        ang_vec = F.normalize(ang_att[i], dim=0)
+                        fused_attention = fused_attention + torch.sigmoid(getattr(self, 'w_geo', 1.0) * ang_vec)
+                    channel_wise_feat = pooled_feat[b * cfg.TRAIN.BATCH_SIZE:(b + 1) * cfg.TRAIN.BATCH_SIZE, :] * fused_attention  # 128x2048 channel-wise multiple
                     bbox_pred = self.RCNN_bbox_pred(channel_wise_feat)  # 128 * 4
                     if self.training and not self.class_agnostic:
                         # select the corresponding columns according to roi labels
@@ -167,19 +178,31 @@ class _fasterRCNN(nn.Module):
                         rcnn_loss_bbox.append(RCNN_loss_bbox)
             # meta attentions loss
             if self.meta_loss:
-                attentions_score = self.Meta_cls_score(attentions)
+                base_att = sem_attentions if sem_attentions is not None else attentions
+                attentions_score = self.Meta_cls_score(base_att)
                 meta_loss = F.cross_entropy(attentions_score, Variable(torch.cat(prn_cls,dim=0).cuda()))
             else:
                 meta_loss = 0
+            if hasattr(self, 'compute_decouple_loss'):
+                meta_loss = meta_loss + getattr(self, 'lambda_decouple', 0.0) * self.compute_decouple_loss()
 
             return rois, rpn_loss_cls, rpn_loss_bbox, rcnn_loss_cls, rcnn_loss_bbox, rois_label, 0, 0, meta_loss
 
         elif self.meta_test and self.use_meta_head:
             cls_prob_list = []
             bbox_pred_list = []
-            for i in range(len(mean_class_attentions)):
-                mean_attentions = mean_class_attentions[i]
-                channel_wise_feat = pooled_feat * mean_attentions
+            mean_sem = mean_class_attentions
+            mean_ang = None
+            if isinstance(mean_class_attentions, tuple):
+                mean_sem, mean_ang = mean_class_attentions
+            for i in range(len(mean_sem)):
+                mean_attentions = mean_sem[i]
+                sem_vec = F.normalize(mean_attentions, dim=0)
+                fused_attention = 1 + torch.sigmoid(getattr(self, 'w_sem', 1.0) * sem_vec)
+                if mean_ang is not None:
+                    ang_vec = F.normalize(mean_ang[i], dim=0)
+                    fused_attention = fused_attention + torch.sigmoid(getattr(self, 'w_geo', 1.0) * ang_vec)
+                channel_wise_feat = pooled_feat * fused_attention
                 # compute bbox offset
                 bbox_pred = self.RCNN_bbox_pred(channel_wise_feat)
                 if self.training and not self.class_agnostic:
@@ -228,10 +251,13 @@ class _fasterRCNN(nn.Module):
 
             # meta attentions loss
             if self.meta_loss and self.training:
-                attentions_score = self.Meta_cls_score(attentions)
+                base_att = sem_attentions if sem_attentions is not None else attentions
+                attentions_score = self.Meta_cls_score(base_att)
                 meta_loss = F.cross_entropy(attentions_score, Variable(torch.cat(prn_cls,dim=0).cuda()))
             else:
                 meta_loss = 0
+            if hasattr(self, 'compute_decouple_loss'):
+                meta_loss = meta_loss + getattr(self, 'lambda_decouple', 0.0) * self.compute_decouple_loss()
 
             if self.training:
                 # classification loss
