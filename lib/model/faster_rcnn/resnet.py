@@ -232,7 +232,7 @@ def resnet152(pretrained=False):
 
 class resnet(_fasterRCNN):
   def __init__(self, classes, num_layers=101, pretrained=False, class_agnostic=False,meta_train=True,meta_test=None,meta_loss=None):
-    self.model_path = 'data/pretrained_model/resnet101_caffe.pth'
+    self.model_path = '/root/autodl-tmp/P-CNN-yuan/data/pretrained_model/resnet101_caffe.pth'
     self.dout_base_model = 1024
     self.pretrained = pretrained
     self.class_agnostic = class_agnostic
