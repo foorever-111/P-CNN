@@ -35,14 +35,14 @@ except NameError:
     xrange = range  # Python 3
 
 class dior(imdb):
-    def __init__(self, image_set, devkit_path="/home/hy/dataset/DIOR"):
+    def __init__(self, image_set, devkit_path="/root/autodl-tmp/P-CNN-yuan/data/DIOR/"):
         if cfg.Test_Subdataset:
             image_set = 'test_100'
         imdb.__init__(self, 'dior_' + image_set)
         self._image_set = image_set
         self._devkit_path = self._get_default_path() if devkit_path is None \
             else devkit_path
-        self._data_path = '/home/hy/dataset/DIOR/'
+        self._data_path = '/root/autodl-tmp/P-CNN-yuan/data/DIOR/'
 
         #first split
         if cfg.TRAIN.META_TYPE == 1:
