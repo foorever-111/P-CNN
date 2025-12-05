@@ -291,7 +291,7 @@ class ImagePatchDiorMetaDataset(data.Dataset):
             cls = []
             data = []
             for n, key in enumerate(list(prn_image.keys())):
-                img = torch.from_numpy(np.array(prn_image[key][i * 6 + 1]))
+                img = torch.from_numpy(np.array(prn_image[key][i * 3 + 1]))
                 img = img.unsqueeze(0)
                 data.append(img.permute(0, 3, 1, 2).contiguous())
                 cls.append(class_to_idx[key])
@@ -301,42 +301,42 @@ class ImagePatchDiorMetaDataset(data.Dataset):
             cls = []
             data = []
             for n, key in enumerate(list(prn_image.keys())):
-                img = torch.from_numpy(np.array(prn_image[key][i * 6 + 2]))
+                img = torch.from_numpy(np.array(prn_image[key][i * 3 + 2]))
                 img = img.unsqueeze(0)
                 data.append(img.permute(0, 3, 1, 2).contiguous())
                 cls.append(class_to_idx[key])
             self.prncls.append(cls)
             self.prndata.append(torch.cat(data,dim=0))
 
-            cls = []
-            data = []
-            for n, key in enumerate(list(prn_image.keys())):
-                img = torch.from_numpy(np.array(prn_image[key][i * 6 + 3]))
-                img = img.unsqueeze(0)
-                data.append(img.permute(0, 3, 1, 2).contiguous())
-                cls.append(class_to_idx[key])
-            self.prncls.append(cls)
-            self.prndata.append(torch.cat(data,dim=0))
+            #cls = []
+            #data = []
+            #for n, key in enumerate(list(prn_image.keys())):
+            #    img = torch.from_numpy(np.array(prn_image[key][i * 3 + 3]))
+            #    img = img.unsqueeze(0)
+            #    data.append(img.permute(0, 3, 1, 2).contiguous())
+            #    cls.append(class_to_idx[key])
+            #self.prncls.append(cls)
+            #self.prndata.append(torch.cat(data,dim=0))
 
-            cls = []
-            data = []
-            for n, key in enumerate(list(prn_image.keys())):
-                img = torch.from_numpy(np.array(prn_image[key][i * 6 + 4]))
-                img = img.unsqueeze(0)
-                data.append(img.permute(0, 3, 1, 2).contiguous())
-                cls.append(class_to_idx[key])
-            self.prncls.append(cls)
-            self.prndata.append(torch.cat(data,dim=0))
+            #cls = []
+            #data = []
+            #for n, key in enumerate(list(prn_image.keys())):
+            #    img = torch.from_numpy(np.array(prn_image[key][i * 4 + 4]))
+            #    img = img.unsqueeze(0)
+            #   data.append(img.permute(0, 3, 1, 2).contiguous())
+            #    cls.append(class_to_idx[key])
+            #self.prncls.append(cls)
+            #self.prndata.append(torch.cat(data,dim=0))
 
-            cls = []
-            data = []
-            for n, key in enumerate(list(prn_image.keys())):
-                img = torch.from_numpy(np.array(prn_image[key][i * 6 + 5]))
-                img = img.unsqueeze(0)
-                data.append(img.permute(0, 3, 1, 2).contiguous())
-                cls.append(class_to_idx[key])
-            self.prncls.append(cls)
-            self.prndata.append(torch.cat(data,dim=0))
+            #cls = []
+            #data = []
+            #for n, key in enumerate(list(prn_image.keys())):
+            #    img = torch.from_numpy(np.array(prn_image[key][i * 4 + 5]))
+            #    img = img.unsqueeze(0)
+            #    data.append(img.permute(0, 3, 1, 2).contiguous())
+            #    cls.append(class_to_idx[key])
+            #self.prncls.append(cls)
+            #self.prndata.append(torch.cat(data,dim=0))
 
 
     def __getitem__(self, index):
