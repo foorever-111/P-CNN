@@ -240,6 +240,11 @@ class resnet(_fasterRCNN):
     self.meta_test = meta_test
     self.meta_loss = meta_loss
 
+    # scaling factors for optional attention/prototype fusion
+    self.lambda_attn = getattr(cfg, 'LAMBDA_ATTN', 1.0)
+    self.lambda_fg = getattr(cfg, 'LAMBDA_FG', 1.0)
+    self.lambda_bg = getattr(cfg, 'LAMBDA_BG', 1.0)
+
     _fasterRCNN.__init__(self, classes, class_agnostic,meta_train,meta_test,meta_loss)
 
   def _init_modules(self):
