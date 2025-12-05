@@ -122,12 +122,43 @@ class imdb(object):
     widths = self._get_widths()
     for i in range(num_images):
       boxes = self.roidb[i]['boxes'].copy()
+      
+      # ========== 修正原始标注中的无效框（x1>x2 或 y1>y2） ==========
+      # 修正 x 轴：x1 > x2 时交换
+      x1 = boxes[:, 0]
+      x2 = boxes[:, 2]
+      swap_x_mask = x1 > x2
+      if swap_x_mask.any():
+        # 交换 x1 和 x2
+        boxes[swap_x_mask, 0] = x2[swap_x_mask]
+        boxes[swap_x_mask, 2] = x1[swap_x_mask]
+        print("[修正] 图像 {} 原始标注中有 {} 个 x1>x2 的无效框".format(i, swap_x_mask.sum()))
+      
+      # 修正 y 轴（防止后续出现类似问题）
+      y1 = boxes[:, 1]
+      y2 = boxes[:, 3]
+      swap_y_mask = y1 > y2
+      if swap_y_mask.any():
+        boxes[swap_y_mask, 1] = y2[swap_y_mask]
+        boxes[swap_y_mask, 3] = y1[swap_y_mask]
+        print("[修正] 图像 {} 原始标注中有 {} 个 y1>y2 的无效框".format(i, swap_y_mask.sum()))
+
+      # ========== 原有翻转逻辑 ==========
       oldx1 = boxes[:, 0].copy()
       oldx2 = boxes[:, 2].copy()
       boxes[:, 0] = widths[i] - oldx2 - 1
       boxes[:, 2] = widths[i] - oldx1 - 1
-      assert (boxes[:, 2] >= boxes[:, 0]).all()
 
+      # ========== 翻转后二次校验 + 兜底修正 ==========
+      post_flip_invalid = boxes[:, 2] < boxes[:, 0]
+      if post_flip_invalid.any():
+        print("[警告] 图像 {} 翻转后仍有 {} 个 x2<x1 的框，已强制修正".format(i, post_flip_invalid.sum()))
+        # 兜底修正：直接取 x1/x2 的最小/最大值
+        boxes[:, 0], boxes[:, 2] = np.minimum(boxes[:, 0], boxes[:, 2]), np.maximum(boxes[:, 0], boxes[:, 2])
+
+      # 原有断言（兼容 Python 2 的字符串格式）
+      assert (boxes[:, 2] >= boxes[:, 0]).all(), \
+        "图像 {} 仍存在 x2 < x1 的无效框，请检查标注或翻转逻辑".format(i)
 
       entry = {'boxes': boxes,
                'gt_overlaps': self.roidb[i]['gt_overlaps'],
