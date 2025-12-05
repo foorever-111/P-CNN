@@ -111,6 +111,10 @@ class _RPN(nn.Module):
         self.rpn_loss_cls = 0
         self.rpn_loss_box = 0
 
+        # Dual-guidance modulation for prototype-driven attention
+        self.sem_linear = nn.Linear(2048, 512)
+        self.ang_linear = nn.Linear(2048, 512)
+
     @staticmethod
     def reshape(x, d):
         input_shape = x.size()
@@ -122,21 +126,31 @@ class _RPN(nn.Module):
         )
         return x
 
-    def forward(self, base_feat, im_info, gt_boxes, num_boxes, attentions=None):
+    def forward(self, base_feat, im_info, gt_boxes, num_boxes, attentions=None, angle_attentions=None):
 
         batch_size = base_feat.size(0)
 
         # return feature map after convrelu layer
-        rpn_conv1 = F.relu(self.RPN_Conv(base_feat), inplace=True) 
+        rpn_conv1 = F.relu(self.RPN_Conv(base_feat), inplace=True)
+        # dual-guidance gated feature
+        gated_feat = rpn_conv1
+        if attentions is not None:
+            sem_vec = attentions.mean(0)
+            sem_gate = torch.sigmoid(self.sem_linear(sem_vec)).view(1, -1, 1, 1)
+            gated_feat = rpn_conv1 * sem_gate
+            if angle_attentions is not None:
+                ang_vec = angle_attentions.mean(0)
+                ang_gate = torch.sigmoid(self.ang_linear(ang_vec)).view(1, -1, 1, 1)
+                gated_feat = gated_feat + rpn_conv1 * ang_gate
         # get rpn classification score
-        rpn_cls_score = self.RPN_cls_score(rpn_conv1) 
+        rpn_cls_score = self.RPN_cls_score(gated_feat)
 
         # 原版metarcnn需要把下面注释掉，改进版需要解注释
         # 在这里加上残差模块
         if attentions is not None:
             merged_attention = self.Merge_Attention(attentions)
             weights = self.Class_Attention_Conv(merged_attention).view(self.nc_score_out, 512, 1, 1)
-            Atten_Score = nn.functional.conv2d(rpn_conv1, weights)
+            Atten_Score = nn.functional.conv2d(gated_feat, weights)
             rpn_cls_score = rpn_cls_score * Atten_Score + rpn_cls_score
 
 
@@ -145,7 +159,7 @@ class _RPN(nn.Module):
         rpn_cls_prob = self.reshape(rpn_cls_prob_reshape, self.nc_score_out)
 
         # get rpn offsets to the anchor boxes
-        rpn_bbox_pred = self.RPN_bbox_pred(rpn_conv1)
+        rpn_bbox_pred = self.RPN_bbox_pred(gated_feat)
 
         # proposal layer
         cfg_key = 'TRAIN' if self.training else 'TEST'
@@ -233,8 +247,18 @@ class _RPN_out_pred_label(nn.Module):
 
         # return feature map after convrelu layer
         rpn_conv1 = F.relu(self.RPN_Conv(base_feat), inplace=True)
+        # dual-guidance channel modulation
+        gated_feat = rpn_conv1
+        if attentions is not None:
+            sem_vec = attentions.mean(0)
+            sem_gate = torch.sigmoid(self.sem_linear(sem_vec)).view(1, -1, 1, 1)
+            gated_feat = rpn_conv1 * sem_gate
+            if angle_attentions is not None:
+                ang_vec = angle_attentions.mean(0)
+                ang_gate = torch.sigmoid(self.ang_linear(ang_vec)).view(1, -1, 1, 1)
+                gated_feat = gated_feat + rpn_conv1 * ang_gate
         # get rpn classification score
-        rpn_cls_score = self.RPN_cls_score(rpn_conv1)
+        rpn_cls_score = self.RPN_cls_score(gated_feat)
 
         rpn_cls_score_reshape = self.reshape(rpn_cls_score, 2)
         rpn_cls_prob_reshape = F.softmax(rpn_cls_score_reshape)

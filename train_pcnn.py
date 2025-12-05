@@ -265,6 +265,10 @@ if __name__ == '__main__':
     if args.net == 'Prototypecnn':
         fasterRCNN = resnet(imdb.classes, 101, pretrained=True, class_agnostic=args.class_agnostic,
                             meta_train=args.meta_train, meta_loss=args.meta_loss)
+    elif args.net == 'ACDPrototypecnn':
+        from lib.model.faster_rcnn.resnet import ACDPrototypecnn
+        fasterRCNN = ACDPrototypecnn(imdb.classes, 101, pretrained=True, class_agnostic=args.class_agnostic,
+                                     meta_train=args.meta_train, meta_loss=args.meta_loss)
     fasterRCNN.create_architecture()
 
     # initilize the optimizer here
