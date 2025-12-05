@@ -70,5 +70,8 @@ POOLING_MODE: align
 CROP_RESIZE_WITH_MAX_POOL: False
 
 mask_on: True #True  False
-RPN_Attention: True 
+RPN_Attention: True
 Test_Subdataset: False
+PROTOTYPE_DIM: 512
+FG_PROTOTYPE_DIM: 512
+DECOUPLE_WEIGHT: 0.1

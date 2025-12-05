@@ -74,15 +74,22 @@ class _fasterRCNN(nn.Module):
 
         # feed image data to base model to obtain base feature map
         base_feat = self.RCNN_base(self.rcnn_conv1(im_data)) #
+        top_feat = self.RCNN_top(base_feat)
+        base_prototype = self.base_prototype_layer(top_feat)
+        fg_prototype = self.fg_prototype_layer(base_feat)
+        prototype_dist = torch.norm(base_prototype - fg_prototype, dim=1).mean()
+        decouple_loss = 0.1 * (1 - prototype_dist)
+        base_proto_weight = self.base_proto_proj(base_prototype)
+        fg_proto_weight = self.fg_proto_proj(fg_prototype)
 
         # feed base feature map tp RPN to obtain rois
         if cfg.RPN_Attention:
             if self.training:
-                rois, rpn_loss_cls, rpn_loss_bbox = self.RCNN_rpn(base_feat, im_info, gt_boxes, num_boxes, attentions)
+                rois, rpn_loss_cls, rpn_loss_bbox = self.RCNN_rpn(base_feat, im_info, gt_boxes, num_boxes, attentions, fg_proto_weight)
             else:
-                rois, rpn_loss_cls, rpn_loss_bbox = self.RCNN_rpn(base_feat, im_info, gt_boxes, num_boxes, mean_class_attentions)
+                rois, rpn_loss_cls, rpn_loss_bbox = self.RCNN_rpn(base_feat, im_info, gt_boxes, num_boxes, mean_class_attentions, fg_proto_weight)
         else:
-            rois, rpn_loss_cls, rpn_loss_bbox = self.RCNN_rpn(base_feat, im_info, gt_boxes, num_boxes)   
+            rois, rpn_loss_cls, rpn_loss_bbox = self.RCNN_rpn(base_feat, im_info, gt_boxes, num_boxes)
 
         # with open('vis/rpnvis{}.pkl'.format(img_id+11726), 'wb') as fw:
         #     pickle.dump(rois, fw)
@@ -137,7 +144,10 @@ class _fasterRCNN(nn.Module):
                         continue
                     channel_wise_feat = pooled_feat[b * cfg.TRAIN.BATCH_SIZE:(b + 1) * cfg.TRAIN.BATCH_SIZE, :] * \
                                         attentions[i]  # 128x2048 channel-wise multiple
-                    bbox_pred = self.RCNN_bbox_pred(channel_wise_feat)  # 128 * 4
+                    base_feat_enhanced = channel_wise_feat * base_proto_weight[b]
+                    fg_feat_enhanced = channel_wise_feat * fg_proto_weight[b]
+                    fused_feat = torch.cat([base_feat_enhanced, fg_feat_enhanced], dim=1)
+                    bbox_pred = self.RCNN_bbox_pred(fused_feat)  # 128 * 4
                     if self.training and not self.class_agnostic:
                         # select the corresponding columns according to roi labels
                         bbox_pred_view = bbox_pred.view(bbox_pred.size(0), int(bbox_pred.size(1) / 4), 4)
@@ -153,11 +163,15 @@ class _fasterRCNN(nn.Module):
                                                             4))
                         bbox_pred = bbox_pred_select.squeeze(1)
                     # compute object classification probability
-                    cls_score = self.RCNN_cls_score(channel_wise_feat)  # 128 * 21
+                    base_cls_score = self.RCNN_cls_score(base_feat_enhanced)  # 128 * 21
+                    fg_cls_score = self.RCNN_fg_cls_score(fg_feat_enhanced)
+                    cls_score = (base_cls_score + fg_cls_score) / 2  # 128 * 21
 
                     if self.training:
                         # classification loss
-                        RCNN_loss_cls = F.cross_entropy(cls_score, rois_label[b * 128:(b + 1) * 128])
+                        base_cls_loss = F.cross_entropy(base_cls_score, rois_label[b * 128:(b + 1) * 128])
+                        fg_cls_loss = F.cross_entropy(fg_cls_score, rois_label[b * 128:(b + 1) * 128])
+                        RCNN_loss_cls = base_cls_loss + fg_cls_loss
                         rcnn_loss_cls.append(RCNN_loss_cls)
                         # bounding box regression L1 lossvcd
                         RCNN_loss_bbox = _smooth_l1_loss(bbox_pred, rois_target[b * 128:(b + 1) * 128],
@@ -172,6 +186,8 @@ class _fasterRCNN(nn.Module):
             else:
                 meta_loss = 0
 
+            meta_loss = meta_loss + decouple_loss
+
             return rois, rpn_loss_cls, rpn_loss_bbox, rcnn_loss_cls, rcnn_loss_bbox, rois_label, 0, 0, meta_loss
 
         elif self.meta_test and self.use_meta_head:
@@ -180,8 +196,11 @@ class _fasterRCNN(nn.Module):
             for i in range(len(mean_class_attentions)):
                 mean_attentions = mean_class_attentions[i]
                 channel_wise_feat = pooled_feat * mean_attentions
+                base_feat_enhanced = channel_wise_feat * base_proto_weight.mean(dim=0)
+                fg_feat_enhanced = channel_wise_feat * fg_proto_weight.mean(dim=0)
+                fused_feat = torch.cat([base_feat_enhanced, fg_feat_enhanced], dim=1)
                 # compute bbox offset
-                bbox_pred = self.RCNN_bbox_pred(channel_wise_feat)
+                bbox_pred = self.RCNN_bbox_pred(fused_feat)
                 if self.training and not self.class_agnostic:
                     # select the corresponding columns according to roi labels
                     bbox_pred_view = bbox_pred.view(bbox_pred.size(0), int(bbox_pred.size(1) / 4), 4)
@@ -191,7 +210,9 @@ class _fasterRCNN(nn.Module):
                     bbox_pred = bbox_pred_select.squeeze(1)
 
                 # compute object classification probability
-                cls_score = self.RCNN_cls_score(channel_wise_feat)
+                base_cls_score = self.RCNN_cls_score(base_feat_enhanced)
+                fg_cls_score = self.RCNN_fg_cls_score(fg_feat_enhanced)
+                cls_score = (base_cls_score + fg_cls_score) / 2
                 cls_prob = F.softmax(cls_score)
 
                 RCNN_loss_cls = 0
@@ -210,7 +231,16 @@ class _fasterRCNN(nn.Module):
 
             return rois, rpn_loss_cls, rpn_loss_bbox, RCNN_loss_cls, RCNN_loss_bbox, rois_label, cls_prob_list, bbox_pred_list, 0
         else:
-            bbox_pred = self.RCNN_bbox_pred(pooled_feat)
+            pooled_feat = pooled_feat.view(batch_size, rois.size(1), -1)
+            base_feat_enhanced = pooled_feat * base_proto_weight.unsqueeze(1)
+            fg_feat_enhanced = pooled_feat * fg_proto_weight.unsqueeze(1)
+            fused_feat = torch.cat([base_feat_enhanced, fg_feat_enhanced], dim=2)
+
+            fused_feat = fused_feat.view(-1, fused_feat.size(2))
+            base_feat_flat = base_feat_enhanced.view(-1, base_feat_enhanced.size(2))
+            fg_feat_flat = fg_feat_enhanced.view(-1, fg_feat_enhanced.size(2))
+
+            bbox_pred = self.RCNN_bbox_pred(fused_feat)
             if self.training and not self.class_agnostic:
                 # select the corresponding columns according to roi labels
                 bbox_pred_view = bbox_pred.view(bbox_pred.size(0), int(bbox_pred.size(1) / 4), 4)
@@ -220,7 +250,9 @@ class _fasterRCNN(nn.Module):
                 bbox_pred = bbox_pred_select.squeeze(1)
 
             # compute object classification probability
-            cls_score = self.RCNN_cls_score(pooled_feat)  # 128 * 1001
+            base_cls_score = self.RCNN_cls_score(base_feat_flat)  # 128 * 1001
+            fg_cls_score = self.RCNN_fg_cls_score(fg_feat_flat)
+            cls_score = (base_cls_score + fg_cls_score) / 2
             cls_prob = F.softmax(cls_score)
 
             RCNN_loss_cls = 0
@@ -233,9 +265,12 @@ class _fasterRCNN(nn.Module):
             else:
                 meta_loss = 0
 
+            meta_loss = meta_loss + decouple_loss
+
             if self.training:
-                # classification loss
-                RCNN_loss_cls = F.cross_entropy(cls_score, rois_label)
+                base_cls_loss = F.cross_entropy(base_cls_score, rois_label)
+                fg_cls_loss = F.cross_entropy(fg_cls_score, rois_label)
+                RCNN_loss_cls = base_cls_loss + fg_cls_loss + decouple_loss
 
                 # bounding box regression L1 loss
                 RCNN_loss_bbox = _smooth_l1_loss(bbox_pred, rois_target, rois_inside_ws, rois_outside_ws)
@@ -264,7 +299,14 @@ class _fasterRCNN(nn.Module):
         normal_init(self.RCNN_rpn.RPN_cls_score, 0, 0.01, cfg.TRAIN.TRUNCATED)
         normal_init(self.RCNN_rpn.RPN_bbox_pred, 0, 0.01, cfg.TRAIN.TRUNCATED)
         normal_init(self.RCNN_cls_score, 0, 0.01, cfg.TRAIN.TRUNCATED)
+        normal_init(self.RCNN_fg_cls_score, 0, 0.01, cfg.TRAIN.TRUNCATED)
         normal_init(self.RCNN_bbox_pred, 0, 0.001, cfg.TRAIN.TRUNCATED)
+        normal_init(self.base_prototype_layer[0], 0, 0.01, cfg.TRAIN.TRUNCATED)
+        normal_init(self.fg_prototype_layer[0], 0, 0.01, cfg.TRAIN.TRUNCATED)
+        normal_init(self.base_prototype_layer[-1], 0, 0.01, cfg.TRAIN.TRUNCATED)
+        normal_init(self.fg_prototype_layer[-1], 0, 0.01, cfg.TRAIN.TRUNCATED)
+        normal_init(self.base_proto_proj, 0, 0.01, cfg.TRAIN.TRUNCATED)
+        normal_init(self.fg_proto_proj, 0, 0.01, cfg.TRAIN.TRUNCATED)
 
     def create_architecture(self):
         self._init_modules()

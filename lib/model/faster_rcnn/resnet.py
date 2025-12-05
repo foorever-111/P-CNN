@@ -263,14 +263,33 @@ class resnet(_fasterRCNN):
     self.max_pooled = nn.MaxPool2d(2)
 
     self.RCNN_cls_score = nn.Linear(2048, self.n_classes)
+    self.RCNN_fg_cls_score = nn.Linear(2048, self.n_classes)
 
     if self.meta_loss:
       self.Meta_cls_score = nn.Linear(2048, self.n_classes)
 
     if self.class_agnostic:
-      self.RCNN_bbox_pred = nn.Linear(2048, 4) # x,y,w,h
+      self.RCNN_bbox_pred = nn.Linear(4096, 4) # x,y,w,h
     else:
-      self.RCNN_bbox_pred = nn.Linear(2048, 4 * self.n_classes)
+      self.RCNN_bbox_pred = nn.Linear(4096, 4 * self.n_classes)
+
+    # prototype branches
+    self.base_prototype_layer = nn.Sequential(
+      nn.Conv2d(2048, 1024, 1),
+      nn.ReLU(),
+      nn.AdaptiveAvgPool2d(1),
+      nn.Flatten(),
+      nn.Linear(1024, 512)
+    )
+    self.fg_prototype_layer = nn.Sequential(
+      nn.Conv2d(1024, 512, 1),
+      nn.ReLU(),
+      nn.AdaptiveAvgPool2d(1),
+      nn.Flatten(),
+      nn.Linear(512, 512)
+    )
+    self.base_proto_proj = nn.Linear(512, 2048)
+    self.fg_proto_proj = nn.Linear(512, 2048)
 
 
     # Fix blocks

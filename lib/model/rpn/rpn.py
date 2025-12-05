@@ -19,7 +19,7 @@ import time
 # 2. 将所有降维后的向量concat(如果直接concat起来，那维度就是动态变化的了)，直接相加算了
 # 3. 将concat以后的向量->1024维
 class AttentionsMerge(nn.Module):
-    
+
     def __init__(self, numOfAttentions):
         super(AttentionsMerge, self).__init__()
         self.numOfAttentions = 20
@@ -33,21 +33,42 @@ class AttentionsMerge(nn.Module):
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, attentions):
-        
-        # merge_list = []
-        # for attention in attentions:
-        #     attention = attention.unsqueeze(dim=0)
-        #     merge_list.append(self.d_reduction(attention))
-        # merge_list = torch.cat(merge_list, dim=1) # 第二步
-        # mergedattention = self.merge(merge_list)
-        # mergedattention = self.sigmoid(mergedattention)
-
-        attentionSum = 0
-        for i in range(1, len(attentions)):
-            attentionSum += attentions[i]
-        mergedattention = self.merge(attentionSum)
+        if attentions is None:
+            return None
+        if isinstance(attentions, (list, tuple)):
+            attention_stack = torch.stack(attentions, dim=0)
+        else:
+            attention_stack = attentions
+        if attention_stack.dim() > 2:
+            attention_stack = attention_stack.mean(dim=0)
+        mergedattention = self.merge(attention_stack)
         mergedattention = self.sigmoid(mergedattention)
 
+        return mergedattention
+
+
+class PrototypeMerge(nn.Module):
+
+    def __init__(self, in_channel, out_channel=1024):
+        super(PrototypeMerge, self).__init__()
+        self.merge = nn.Sequential(
+            nn.Linear(in_channel, out_channel),
+            nn.ReLU(),
+            nn.Linear(out_channel, out_channel),
+            nn.Sigmoid()
+        )
+
+    def forward(self, attentions):
+        if attentions is None:
+            return None
+        if isinstance(attentions, (list, tuple)):
+            attention_stack = torch.stack(attentions, dim=0)
+        else:
+            attention_stack = attentions
+        if attention_stack.dim() > 2:
+            attention_stack = attention_stack.mean(dim=0)
+        mergedattention = attention_stack.mean(dim=0)
+        mergedattention = self.merge(mergedattention)
         return mergedattention
 
 
@@ -94,6 +115,8 @@ class _RPN(nn.Module):
         # 原版metarcnn需要把下面注释掉，改进版需要解注释
         # 对attentions的预处理
         self.Merge_Attention = AttentionsMerge(num_classes)
+        self.FG_Merge_Attention = PrototypeMerge(in_channel=512, out_channel=1024)
+        self.Fuse_Attention_Linear = nn.Linear(2048, 1024)
         # 和RPN_cls_score部分构成残差
         # in_channel：attention向量的维度1024 out_channel：先试试看512
         self.Class_Attention_Conv = Attention2Weights(in_channel=1024, out_channel=self.nc_score_out, kernel_size=1)
@@ -122,7 +145,7 @@ class _RPN(nn.Module):
         )
         return x
 
-    def forward(self, base_feat, im_info, gt_boxes, num_boxes, attentions=None):
+    def forward(self, base_feat, im_info, gt_boxes, num_boxes, attentions=None, fg_attentions=None):
 
         batch_size = base_feat.size(0)
 
@@ -135,7 +158,14 @@ class _RPN(nn.Module):
         # 在这里加上残差模块
         if attentions is not None:
             merged_attention = self.Merge_Attention(attentions)
-            weights = self.Class_Attention_Conv(merged_attention).view(self.nc_score_out, 512, 1, 1)
+            merged_fg_attention = self.FG_Merge_Attention(fg_attentions) if fg_attentions is not None else None
+            if merged_attention is not None and merged_fg_attention is not None:
+                fused_attention = torch.cat([merged_attention, merged_fg_attention], dim=-1)
+                fused_attention = self.Fuse_Attention_Linear(fused_attention)
+            else:
+                fused_attention = merged_attention
+            fused_attention = F.relu(fused_attention)
+            weights = self.Class_Attention_Conv(fused_attention).view(self.nc_score_out, 512, 1, 1)
             Atten_Score = nn.functional.conv2d(rpn_conv1, weights)
             rpn_cls_score = rpn_cls_score * Atten_Score + rpn_cls_score
 
