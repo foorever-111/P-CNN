@@ -125,6 +125,12 @@ class _RPN(nn.Module):
             input_shape[3]
         )
         return x
+    
+    def _normalize_attention_input(self, attentions):
+        if isinstance(attentions, dict):
+            # Preserve deterministic ordering to keep class alignment stable
+            attentions = torch.stack([attentions[k] for k in sorted(attentions.keys())])
+        return attentions
 
     def forward(self, base_feat, im_info, gt_boxes, num_boxes, attentions=None, angle_attentions=None):
 
@@ -134,6 +140,8 @@ class _RPN(nn.Module):
         rpn_conv1 = F.relu(self.RPN_Conv(base_feat), inplace=True)
         # dual-guidance gated feature with residual preservation
         gated_feat = rpn_conv1
+        attentions = self._normalize_attention_input(attentions)
+        angle_attentions = self._normalize_attention_input(angle_attentions)
         if attentions is not None:
             sem_vec = F.normalize(attentions.mean(0), dim=0)
             sem_gate = torch.sigmoid(self.sem_linear(sem_vec)).view(1, -1, 1, 1)
