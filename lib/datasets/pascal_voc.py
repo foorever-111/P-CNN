@@ -758,6 +758,88 @@ class dior(imdb):
             with open(os.path.join(output_dir, cls + '_pr.pkl'), 'wb') as f:
                 pickle.dump({'rec': rec, 'prec': prec, 'ap': ap}, f)
         print('Mean AP = {:.4f}'.format(np.mean(aps)))
+
+
+class nwpu_vhr10(imdb):
+    def __init__(self, image_set, devkit_path="/path/to/NWPU-VHR-10"):
+        imdb.__init__(self, 'nwpu_vhr10_' + image_set)
+        self._image_set = image_set
+        self._devkit_path = devkit_path
+        self._data_path = os.path.join(self._devkit_path)
+
+        self._classes = ['__background__',
+                         'airplane', 'ship', 'storage-tank',
+                         'baseball-diamond', 'tennis-court', 'basketball-court',
+                         'ground-track-field', 'harbor', 'bridge', 'vehicle']
+
+        self._class_to_ind = dict(zip(self.classes, xrange(self.num_classes)))
+        self._image_ext = '.png'
+        self._image_index = self._load_image_set_index()
+        self._roidb_handler = self.gt_roidb
+        self._salt = str(uuid.uuid4())
+        self._comp_id = 'comp4'
+
+        self.config = {'cleanup': True,
+                       'use_salt': True,
+                       'use_diff': False,
+                       'matlab_eval': False,
+                       'rpn_file': None,
+                       'min_size': 2}
+
+        assert os.path.exists(self._devkit_path), \
+            'Dataset path does not exist: {}'.format(self._devkit_path)
+
+    def image_path_from_index(self, index):
+        image_path = os.path.join(self._data_path, 'positive image set',
+                                  index + self._image_ext)
+        assert os.path.exists(image_path), \
+            'Image path does not exist: {}'.format(image_path)
+        return image_path
+
+    def _load_image_set_index(self):
+        image_set_file = os.path.join(self._data_path, 'ImageSets', 'Main',
+                                      self._image_set + '.txt')
+        assert os.path.exists(image_set_file), \
+            'Image set file does not exist: {}'.format(image_set_file)
+        with open(image_set_file) as f:
+            image_index = [x.strip() for x in f.readlines()]
+        return image_index
+
+    def _load_pascal_annotation(self, index):
+        filename = os.path.join(self._data_path, 'annotation', index + '.xml')
+        tree = ET.parse(filename)
+        objs = tree.findall('object')
+        num_objs = len(objs)
+
+        boxes = np.zeros((num_objs, 4), dtype=np.uint16)
+        gt_classes = np.zeros((num_objs), dtype=np.int32)
+        overlaps = np.zeros((num_objs, self.num_classes), dtype=np.float32)
+        seg_areas = np.zeros((num_objs), dtype=np.float32)
+
+        for ix, obj in enumerate(objs):
+            cls_name = obj.find('name').text.strip()
+            if cls_name not in self._classes:
+                continue
+            cls = self._class_to_ind[cls_name]
+
+            bbox = obj.find('bndbox')
+            x1 = float(bbox.find('xmin').text) - 1
+            y1 = float(bbox.find('ymin').text) - 1
+            x2 = float(bbox.find('xmax').text) - 1
+            y2 = float(bbox.find('ymax').text) - 1
+
+            boxes[ix, :] = [x1, y1, x2, y2]
+            gt_classes[ix] = cls
+            overlaps[ix, cls] = 1.0
+            seg_areas[ix] = (x2 - x1 + 1) * (y2 - y1 + 1)
+
+        overlaps = scipy.sparse.csr_matrix(overlaps)
+
+        return {'boxes': boxes,
+                'gt_classes': gt_classes,
+                'overlaps': overlaps,
+                'flipped': False,
+                'seg_areas': seg_areas}
         writer.writerow(cls_names)
         writer.writerow(ap_values)
         csvfile.close()

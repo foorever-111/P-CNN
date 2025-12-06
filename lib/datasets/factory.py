@@ -13,7 +13,7 @@ from __future__ import print_function
 __sets = {}
 
 from lib.datasets.coco import coco
-from lib.datasets.pascal_voc import pascal_voc
+from lib.datasets.pascal_voc import pascal_voc, nwpu_vhr10
 from lib.datasets.dior import dior
 # # Set up voc_<year>_<split>
 for year in ['2007', '2012']:
@@ -33,11 +33,15 @@ for year in ['2017']:
     __sets[name] = (lambda split=split, year=year: coco(split, year))
 
 # set dior datasets
-for split in ['train', 'val', 'trainval', 'test', 'shots', 'train_first_split', 'train_second_split', 'train_third_split', 'train_easy_novel_split', 
+for split in ['train', 'val', 'trainval', 'test', 'shots', 'train_first_split', 'train_second_split', 'train_third_split', 'train_easy_novel_split',
               'train_split_1', 'train_split_2', 'train_split_3', 'train_split_4', 'train_split_11', 'train_split_22', 'train_split_33', 'train_split_44',
               'train_ablation_split_11', 'train_ablation_split_22', 'train_ablation_split_33', 'train_ablation_split_44', 'train_split_55']:
   name = 'dior_{}'.format(split)
   __sets[name] = (lambda split=split: dior(split))
+
+for split in ['train', 'val', 'test']:
+  name = 'nwpu_vhr10_{}'.format(split)
+  __sets[name] = (lambda split=split: nwpu_vhr10(split))
 
 def get_imdb(name):
   """Get an imdb (image database) by name."""

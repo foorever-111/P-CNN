@@ -17,6 +17,22 @@ name_dict = {'baseballfield': 'C1', 'basketballcourt': 'C2', 'bridge': 'C3', 'ch
              'dam': 'C11', 'golffield': 'C12', 'storagetank': 'C13', 'tenniscourt': 'C14', 'vehicle': 'C15',
              'Expressway-Service-area': 'C16', 'overpass': 'C17', 'stadium': 'C18', 'trainstation': 'C19', 'windmill': 'C20'}
 
+nwpu_vhr10_name_dict = {
+    'airplane': 'C1',
+    'ship': 'C2',
+    'storage-tank': 'C3',
+    'baseball-diamond': 'C4',
+    'tennis-court': 'C5',
+    'basketball-court': 'C6',
+    'ground-track-field': 'C7',
+    'harbor': 'C8',
+    'bridge': 'C9',
+    'vehicle': 'C10'
+}
+
+for key, value in nwpu_vhr10_name_dict.items():
+    name_dict.setdefault(key, value)
+
 def save_net(fname, net):
     import h5py
     h5f = h5py.File(fname, mode='w')

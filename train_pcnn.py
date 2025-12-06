@@ -159,31 +159,38 @@ if __name__ == '__main__':
     print(args)
     if args.use_tfboard:
         writer = SummaryWriter(args.log_dir)
-    args.dataset == "dior"
-    if args.phase == 1:
-        if args.meta_type == 1:
-            args.imdb_name = "dior_train_split_11"
-        elif args.meta_type == 2:
-            args.imdb_name = "dior_train_split_22"
-        elif args.meta_type == 3:
-            args.imdb_name = "dior_train_split_33"
-        elif args.meta_type == 4:
-            args.imdb_name = "dior_train_split_44"
-        elif args.meta_type == 5:
-             args.imdb_name = "dior_train_split_55"
+    if args.dataset == "dior":
+        if args.phase == 1:
+            if args.meta_type == 1:
+                args.imdb_name = "dior_train_split_11"
+            elif args.meta_type == 2:
+                args.imdb_name = "dior_train_split_22"
+            elif args.meta_type == 3:
+                args.imdb_name = "dior_train_split_33"
+            elif args.meta_type == 4:
+                args.imdb_name = "dior_train_split_44"
+            elif args.meta_type == 5:
+                args.imdb_name = "dior_train_split_55"
+        else:
+            args.imdb_name = "dior_shots"
+        args.imdbval_name = "dior_test"
+        args.set_cfgs = ['ANCHOR_SCALES', '[2, 4, 8, 16, 32]', 'ANCHOR_RATIOS', '[0.5,1,2]', 'MAX_NUM_GT_BOXES', '50']
+        args.cfg_file = "cfgs/dior.yml"
+    elif args.dataset == "nwpu_vhr10":
+        args.imdb_name = "nwpu_vhr10_train"
+        args.imdbval_name = "nwpu_vhr10_test"
+        args.set_cfgs = ['ANCHOR_SCALES', '[8, 16, 32]', 'ANCHOR_RATIOS', '[0.5,1,2]', 'MAX_NUM_GT_BOXES', '50']
+        args.cfg_file = "cfgs/nwpu_vhr10.yml"
     else:
-        args.imdb_name = "dior_shots"
-    args.imdbval_name = "dior_test" 
-    args.set_cfgs = ['ANCHOR_SCALES', '[2, 4, 8, 16, 32]', 'ANCHOR_RATIOS', '[0.5,1,2]', 'MAX_NUM_GT_BOXES', '50']
+        raise ValueError('Unsupported dataset: {}'.format(args.dataset))
 
-     # the number of sets of metaclass
+    # the number of sets of metaclass
     cfg.TRAIN.META_TYPE = args.meta_type
 
     cfg.USE_GPU_NMS = args.cuda
     if args.cuda:
         cfg.CUDA = True
 
-    args.cfg_file = "cfgs/dior.yml"
     if args.cfg_file is not None:
         cfg_from_file(args.cfg_file)
     if args.set_cfgs is not None:
@@ -220,6 +227,11 @@ if __name__ == '__main__':
             metaclass = cfg.TRAIN.ALLCLASSES_FOURTH
         if args.meta_type == 5:
             metaclass = cfg.TRAIN.ALLCLASSES_FSODM
+
+    if args.dataset != "dior" and args.meta_train:
+        print('Meta training currently only configured for dior; disabling meta settings for {}.'.format(args.dataset))
+        args.meta_train = False
+        args.meta_loss = False
 
     # prepare meta sets for meta training
     if args.meta_train:

@@ -119,6 +119,7 @@ if __name__ == '__main__':
     if torch.cuda.is_available() and not args.cuda:
         print("WARNING: You have a CUDA device, so you should probably run with --cuda")
     np.random.seed(cfg.RNG_SEED)
+    args.cfg_file = None
     if args.dataset == "coco":
         args.imdb_name = "coco_2014_train+coco_2014_valminusminival"
         args.imdbval_name = "coco_2014_minival"
@@ -127,12 +128,18 @@ if __name__ == '__main__':
         args.imdbval_name = "voc_2007_test"
         args.set_cfgs = ['ANCHOR_SCALES', '[8, 16, 32]', 'ANCHOR_RATIOS', '[0.5,1,2]', 'MAX_NUM_GT_BOXES', '20']
     elif args.dataset == "dior":
-        args.imdbval_name = "dior_test" 
+        args.imdbval_name = "dior_test"
         args.set_cfgs = ['ANCHOR_SCALES', '[2, 4, 8, 16, 32]', 'ANCHOR_RATIOS', '[0.5,1,2]', 'MAX_NUM_GT_BOXES', '50']
+        args.cfg_file = "cfgs/dior.yml"
+    elif args.dataset == "nwpu_vhr10":
+        args.imdbval_name = "nwpu_vhr10_test"
+        args.set_cfgs = ['ANCHOR_SCALES', '[8, 16, 32]', 'ANCHOR_RATIOS', '[0.5,1,2]', 'MAX_NUM_GT_BOXES', '50']
+        args.cfg_file = "cfgs/nwpu_vhr10.yml"
+    else:
+        raise ValueError('Unsupported dataset: {}'.format(args.dataset))
 
     # the number of sets of metaclass
     cfg.TRAIN.META_TYPE = args.meta_type
-    args.cfg_file = "cfgs/dior.yml"
     if args.cfg_file is not None:
         cfg_from_file(args.cfg_file)
     if args.set_cfgs is not None:
