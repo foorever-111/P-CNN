@@ -213,6 +213,13 @@ if __name__ == '__main__':
 
     for i in range(num_images):
         data = next(data_iter)
+        img_ids = data[4] if len(data) > 4 else None
+        if isinstance(img_ids, torch.Tensor):
+            img_ids = img_ids.tolist()
+        if isinstance(img_ids, (list, tuple)):
+            current_img_id = img_ids[0]
+        else:
+            current_img_id = img_ids
         im_data_list = []
         im_info_list = []
         gt_boxes_list = []
@@ -247,7 +254,7 @@ if __name__ == '__main__':
         rpn_loss_cls, rpn_loss_box, \
         RCNN_loss_cls, RCNN_loss_bbox, \
         rois_label, cls_prob_list, bbox_pred_list, _ = fasterRCNN(im_data_list, im_info_list, gt_boxes_list,
-                                                                  num_boxes_list,mean_class_attentions=mean_class_attentions, img_id=int(data[4]))
+                                                                  num_boxes_list,mean_class_attentions=mean_class_attentions, img_id=current_img_id)
         if args.meta_test:
             if cfg.TRAIN.USE_META_HEAD:
                 for clsidx in range(len(cls_prob_list)):

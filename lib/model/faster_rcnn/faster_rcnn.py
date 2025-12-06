@@ -82,10 +82,38 @@ class _fasterRCNN(nn.Module):
             else:
                 rois, rpn_loss_cls, rpn_loss_bbox = self.RCNN_rpn(base_feat, im_info, gt_boxes, num_boxes, mean_class_attentions)
         else:
-            rois, rpn_loss_cls, rpn_loss_bbox = self.RCNN_rpn(base_feat, im_info, gt_boxes, num_boxes)   
+            rois, rpn_loss_cls, rpn_loss_bbox = self.RCNN_rpn(base_feat, im_info, gt_boxes, num_boxes)
 
         # with open('vis/rpnvis{}.pkl'.format(img_id+11726), 'wb') as fw:
         #     pickle.dump(rois, fw)
+
+        save_img_ids = None
+        if img_id is not None:
+            save_img_ids = img_id
+            if isinstance(save_img_ids, torch.Tensor):
+                save_img_ids = save_img_ids.tolist()
+            if not isinstance(save_img_ids, (list, tuple)):
+                save_img_ids = [save_img_ids]
+            normalized_ids = []
+            for single_id in save_img_ids:
+                if isinstance(single_id, torch.Tensor):
+                    normalized_ids.append(str(single_id.item()))
+                else:
+                    normalized_ids.append(str(single_id))
+            save_img_ids = normalized_ids
+
+        if self.training and save_img_ids is not None:
+            rois_to_save = rois.detach().cpu().numpy()
+            if rois_to_save.ndim == 2:
+                rois_to_save = rois_to_save[np.newaxis, ...]
+            batch_rois = rois_to_save.shape[0]
+            if len(save_img_ids) != batch_rois and len(save_img_ids) > 0:
+                save_img_ids = (save_img_ids * batch_rois)[:batch_rois]
+            os.makedirs('vis', exist_ok=True)
+            for idx in range(min(len(save_img_ids), batch_rois)):
+                save_path = os.path.join('vis', 'rpnvis_{}.pkl'.format(save_img_ids[idx]))
+                with open(save_path, 'wb') as fw:
+                    pickle.dump(rois_to_save[idx], fw)
 
         # if it is training phase, then use ground truth bboxes for refining
         if self.training:

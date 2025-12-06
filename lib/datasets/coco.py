@@ -188,6 +188,7 @@ class coco(imdb):
             'gt_classes': gt_classes,
             'gt_overlaps': overlaps,
             'flipped': False,
+            'img_id': index,
             'seg_areas': seg_areas}
 
   def _get_widths(self):
@@ -209,7 +210,8 @@ class coco(imdb):
                'gt_classes': self.roidb[i]['gt_classes'],
                'gt_overlaps': self.roidb[i]['gt_overlaps'],
                'flipped': True,
-               'seg_areas': self.roidb[i]['seg_areas']}
+               'seg_areas': self.roidb[i]['seg_areas'],
+               'img_id': str(self.roidb[i].get('img_id', self._image_index[i])) + '_flip'}
 
       self.roidb.append(entry)
     self._image_index = self._image_index * 2
