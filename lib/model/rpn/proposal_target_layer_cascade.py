@@ -184,11 +184,14 @@ class _ProposalTargetLayer(nn.Module):
                 # fall back to using the available proposals as background to
                 # keep training stable instead of raising.
                 bg_rois_per_this_image = min(rois_per_image, num_proposal)
+                # torch.tensor and explicit dtype values are not available on
+                # older PyTorch versions bundled with this project (e.g., 0.3.x),
+                # so use legacy constructors to keep the code portable.
                 if bg_rois_per_this_image == 0:
-                    bg_inds = torch.tensor([], dtype=torch.long).type_as(gt_boxes)
+                    bg_inds = gt_boxes.new().long().view(-1)
                 else:
                     bg_inds = torch.arange(bg_rois_per_this_image).type_as(gt_boxes).long()
-                fg_inds = torch.tensor([], dtype=torch.long).type_as(gt_boxes)
+                fg_inds = gt_boxes.new().long().view(-1)
                 fg_rois_per_this_image = 0
 
             # The indices that we're selecting (both fg and bg)
