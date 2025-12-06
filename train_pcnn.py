@@ -349,6 +349,11 @@ if __name__ == '__main__':
             except:
                 data_iter = iter(dataloader)
                 data = next(data_iter)
+            img_ids = data[4] if len(data) > 4 else None
+            if isinstance(img_ids, torch.Tensor):
+                img_ids = img_ids.tolist()
+            elif img_ids is not None and not isinstance(img_ids, (list, tuple)):
+                img_ids = [img_ids]
 
             im_data_list = []
             im_info_list = []
@@ -407,7 +412,7 @@ if __name__ == '__main__':
             rois, rpn_loss_cls, rpn_loss_box, \
             RCNN_loss_cls, RCNN_loss_bbox, \
             rois_label, cls_prob, bbox_pred, meta_loss = fasterRCNN(im_data_list, im_info_list, gt_boxes_list,
-                                                                    num_boxes_list)
+                                                                    num_boxes_list, img_id=img_ids)
 
             if args.meta_train:
                 loss = rpn_loss_cls.mean() + rpn_loss_box.mean() + sum(RCNN_loss_cls) / args.batch_size + sum(

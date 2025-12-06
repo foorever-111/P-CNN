@@ -260,6 +260,7 @@ class pascal_voc(imdb):
                 'gt_ishard': ishards,
                 'gt_overlaps': overlaps,
                 'flipped': False,
+                'img_id': index,
                 'seg_areas': seg_areas}
 
     def _get_comp_id(self):

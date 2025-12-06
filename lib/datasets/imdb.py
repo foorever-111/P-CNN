@@ -163,7 +163,9 @@ class imdb(object):
       entry = {'boxes': boxes,
                'gt_overlaps': self.roidb[i]['gt_overlaps'],
                'gt_classes': self.roidb[i]['gt_classes'],
-               'flipped': True}
+               'flipped': True,
+               'img_id': str(self.roidb[i].get('img_id', self.image_index[i])) + '_flip',
+               'seg_areas': self.roidb[i].get('seg_areas', np.zeros((boxes.shape[0],), dtype=np.float32))}
       self.roidb.append(entry)
     self._image_index = self._image_index * 2
 
@@ -277,12 +279,18 @@ class imdb(object):
         overlaps[I, gt_classes[argmaxes[I]]] = maxes[I]
 
       overlaps = scipy.sparse.csr_matrix(overlaps)
+      base_img_id = None
+      if gt_roidb is not None:
+        base_img_id = gt_roidb[i].get('img_id', None)
+      if base_img_id is None:
+        base_img_id = self.image_index[i] if len(self.image_index) > i else str(i)
       roidb.append({
         'boxes': boxes,
         'gt_classes': np.zeros((num_boxes,), dtype=np.int32),
         'gt_overlaps': overlaps,
         'flipped': False,
         'seg_areas': np.zeros((num_boxes,), dtype=np.float32),
+        'img_id': base_img_id,
       })
     return roidb
 
